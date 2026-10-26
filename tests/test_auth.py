@@ -65,6 +65,11 @@ def test_the_page_and_its_config_stay_public(client):
     assert cfg == {"auth": "supabase", "supabase_url": URL, "supabase_anon_key": "anon"}
 
 
+def test_the_health_check_needs_no_login(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200 and r.json()["ok"] is True
+
+
 def test_the_audit_log_records_who_acted(client):
     h = bearer(token("packer@babylonllc.com"))
     o = client.post("/api/dev/order", json={"items": [{"sku": "BAB-LIP-01", "qty": 1}]}, headers=h).json()

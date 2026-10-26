@@ -69,6 +69,10 @@ class Settings:
         self.out_dir = Path(_e("OUT_DIR", str(ROOT / "var" / "labels")))
         self.dev_tools = self.shopify_mode == "mock" or _bool("DEV_TOOLS")
         self.poll_seconds = int(_e("POLL_SECONDS", "0") or 0)
+        # Free hosts (Render) sleep after 15 idle minutes, which would stop polling. While running, the app
+        # calls its own /healthz this often. Render sets RENDER_EXTERNAL_URL by itself.
+        self.keepalive_url = (_e("KEEPALIVE_URL") or _e("RENDER_EXTERNAL_URL")).rstrip("/")
+        self.keepalive_seconds = int(_e("KEEPALIVE_SECONDS", "600") or 0)
         self.sync_seconds = int(_e("SYNC_SECONDS", "0") or 0)
         # Only for a test store stocked with the mock SKUs: lets mock Odoo counts be pushed to live Shopify
         self.allow_mock_sync = _bool("ALLOW_MOCK_SYNC")

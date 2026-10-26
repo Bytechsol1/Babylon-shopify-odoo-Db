@@ -23,7 +23,7 @@ python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\
 pip install -r requirements.txt
 uvicorn app.main:app --port 8000                       # one worker: the per-order locks live in this process
 # open http://localhost:8000
-pytest                                                  # 86 tests
+pytest                                                  # 89 tests
 ```
 
 The screen is a React app in `frontend/`. Its build is already in `app/static`, so running the station needs only
@@ -91,7 +91,15 @@ Vercel (the screen) ──/api──▶ Lightsail (Python, HTTPS via Caddy) ─�
 3. The app creates its own tables in the `babylon` schema on first start. That schema is not exposed through
    Supabase's public API; row level security is on as well.
 
-**Lightsail** (Ubuntu 24.04, same AWS region as the Supabase project, 1 GB RAM is enough)
+**Render (free plan)**: New → Blueprint → this repo; `render.yaml` sets everything up and asks for the secrets.
+- `DATABASE_URL` must be Supabase's **Session pooler** string (Render has no IPv6, so the direct `db.…` address fails).
+- Free instances sleep after 15 idle minutes, which would stop the Shopify polling. The app pings its own
+  `/healthz` every 10 minutes while it runs; add a free uptime monitor (e.g. UptimeRobot, every 5 minutes) on
+  `https://<service>.onrender.com/healthz` so it also wakes up again after a restart.
+- `/healthz` answers without a login: `{"ok": true, "uptime_s": …, "poll_age_s": …}`. A growing `poll_age_s`
+  means Shopify isn't being read.
+
+**Lightsail** (alternative to Render: Ubuntu 24.04, same AWS region as the Supabase project, 1 GB RAM is enough)
 1. Attach a static IP, and open ports 80 and 443 in the instance's networking tab.
 2. Point a DNS name at the static IP (or use `<ip-with-dashes>.sslip.io` until there is one).
 3. `git clone` this repo, then `sudo bash deploy/lightsail/setup.sh <that-domain>`.
@@ -163,5 +171,5 @@ app/shipping.py      mock labels and EasyPost
 app/zpl.py           ZPL builder and raw port-9100 print
 app/main.py          API, webhooks, test controls
 frontend/            pack station screen (React). `npm run build` writes it into app/static
-tests/               86 tests: every scenario above, plus concurrency, polling, scale (test_qa.py) and logins (test_auth.py)
+tests/               89 tests: every scenario above, plus concurrency, polling, scale (test_qa.py) and logins (test_auth.py)
 ```

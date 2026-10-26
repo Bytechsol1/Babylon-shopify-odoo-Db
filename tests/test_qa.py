@@ -302,6 +302,21 @@ def test_stock_levels_match_the_per_sku_answers():
     assert levels["BAB-MST-60"]["lots"] == ["L2609-A"]  # the expired lot is left out
 
 
+def test_keepalive_pings_the_apps_own_health_check(monkeypatch):
+    from app import main
+    seen = []
+    monkeypatch.setattr(settings, "keepalive_url", "https://babylon.onrender.com")
+    monkeypatch.setattr(main.httpx, "get", lambda url, timeout: seen.append(url) or httpx.Response(200, request=httpx.Request("GET", url)))
+    main._ping_self()
+    assert seen == ["https://babylon.onrender.com/healthz"]
+
+
+def test_render_sets_the_keepalive_address_by_itself(monkeypatch):
+    monkeypatch.delenv("KEEPALIVE_URL", raising=False)
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://babylon.onrender.com/")
+    assert Settings().keepalive_url == "https://babylon.onrender.com"
+
+
 def test_order_history_comes_back_in_order():
     o = make([(LIP, 1)])
     pipeline.scan_lot(o["id"], "L2609-L")

@@ -22,21 +22,33 @@ VIEWS = {"all": None, "queue": pipeline.ACTIVE, "done": pipeline.DONE, "decision
 _hooks = ThreadPoolExecutor(max_workers=8, thread_name_prefix="webhook")  # bounded, however many arrive
 
 
+STARTED = time.time()
+_last_ok = {}  # background job -> when it last finished without an error
+
+
 def _loop(fn, every, name):
     while True:
         time.sleep(every)
         try:
             fn()
+            _last_ok[name] = time.time()
         except Exception as e:  # keep the loop alive; the log shows what failed
             db.log("system", f"{name}_error", str(e))
 
 
+def _ping_self():
+    """A request to our own public address counts as traffic, so a free host doesn't put the app to sleep."""
+    httpx.get(f"{settings.keepalive_url}/healthz", timeout=20).raise_for_status()
+
+
 @asynccontextmanager
 async def lifespan(app):
-    if settings.poll_seconds:
-        threading.Thread(target=_loop, args=(pipeline.poll_recent, settings.poll_seconds, "poll"), daemon=True).start()
-    if settings.sync_seconds:
-        threading.Thread(target=_loop, args=(pipeline.sync_inventory, settings.sync_seconds, "sync"), daemon=True).start()
+    jobs = [(pipeline.poll_recent, settings.poll_seconds, "poll"), (pipeline.sync_inventory, settings.sync_seconds, "sync")]
+    if settings.keepalive_url:
+        jobs.append((_ping_self, settings.keepalive_seconds, "keepalive"))
+    for fn, every, name in jobs:
+        if every:
+            threading.Thread(target=_loop, args=(fn, every, name), daemon=True).start()
     yield
 
 
@@ -71,6 +83,15 @@ async def require_login(request: Request, call_next):
         return await call_next(request)
     finally:
         audit.actor.reset(mark)
+
+
+@app.get("/healthz")
+def healthz():
+    """For Render's health check and an uptime pinger: public, no login, no database call.
+    `poll_age_s` says how long ago Shopify was last read successfully (null until the first poll)."""
+    now = time.time()
+    poll = _last_ok.get("poll")
+    return {"ok": True, "uptime_s": int(now - STARTED), "poll_age_s": int(now - poll) if poll else None}
 
 
 @app.get("/api/public-config")
