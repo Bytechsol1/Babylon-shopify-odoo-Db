@@ -10,7 +10,7 @@ import Orders from "./pages/Orders.jsx";
 import Stock from "./pages/Stock.jsx";
 
 const SUBTITLES = {
-  dashboard: "Babylon ships what it can. UFSI ships the rest.",
+  dashboard: "",
   pack: "Pick, pack, weigh, label, ship",
   orders: "Every order the lane has seen",
   stock: "Babylon's San Jose warehouse",
