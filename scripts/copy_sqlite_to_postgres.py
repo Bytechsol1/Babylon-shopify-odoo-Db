@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import os  # noqa: E402
 os.environ.update(BABYLON_NO_DOTENV="1", DATABASE_URL=url, DB_SCHEMA=schema)
 from app import store_pg  # noqa: E402
-store_pg._p()
+store_pg._p().close()  # creates the schema, tables and indexes, then lets go of its connections
 
 s = sqlite3.connect(src)
 orders = s.execute("SELECT data FROM orders ORDER BY rowid").fetchall()
