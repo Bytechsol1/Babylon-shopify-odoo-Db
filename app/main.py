@@ -85,7 +85,7 @@ async def require_login(request: Request, call_next):
         audit.actor.reset(mark)
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])  # uptime monitors often send HEAD
 def healthz():
     """For Render's health check and an uptime pinger: public, no login, no database call.
     `poll_age_s` says how long ago Shopify was last read successfully (null until the first poll)."""
@@ -102,7 +102,7 @@ def public_config():
             "supabase_anon_key": settings.supabase_anon_key if on else ""}
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def index():
     # always fetch the page fresh, so a new build shows on the next refresh (its assets have hashed names)
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
