@@ -57,6 +57,15 @@ class Settings:
         self.printer_port = int(_e("PRINTER_PORT", "9100") or 9100)
 
         self.db_path = _e("DB_PATH", str(ROOT / "var" / "babylon.db"))
+        self.database_url = _e("DATABASE_URL")       # set = Postgres (Supabase); empty = the SQLite file above
+        self.db_schema = _e("DB_SCHEMA", "babylon")  # kept out of Supabase's public API schema
+
+        # Logins (AUTH=supabase): the browser signs in with Supabase Auth, the API checks the token.
+        self.auth = _e("AUTH", "off")
+        self.supabase_url = _e("SUPABASE_URL").rstrip("/")
+        self.supabase_anon_key = _e("SUPABASE_ANON_KEY")
+        self.supabase_jwt_secret = _e("SUPABASE_JWT_SECRET")  # only for projects still signing with the legacy secret
+        self.allowed_emails = {s.strip().lower() for s in _e("ALLOWED_EMAILS").split(",") if s.strip()}
         self.out_dir = Path(_e("OUT_DIR", str(ROOT / "var" / "labels")))
         self.dev_tools = self.shopify_mode == "mock" or _bool("DEV_TOOLS")
         self.poll_seconds = int(_e("POLL_SECONDS", "0") or 0)
@@ -67,7 +76,7 @@ class Settings:
 
     CHOICES = {"shopify_mode": ("mock", "live"), "easypost_mode": ("mock", "live"), "printer_mode": ("file", "tcp"),
                "deposco_mode": ("mock", "off", "live"), "odoo_mode": ("mock", "real"), "claim_mode": ("live", "shadow"),
-               "notify_mode": ("auto", "on", "off")}
+               "notify_mode": ("auto", "on", "off"), "auth": ("off", "supabase")}
 
     def _validate(self):
         """A typo such as CLAIM_MODE=Live must stop the app, not quietly act like another mode."""
@@ -76,6 +85,9 @@ class Settings:
             if v not in allowed:
                 raise ValueError(f"{attr.upper()}={getattr(self, attr)!r} is not one of {', '.join(allowed)}")
             setattr(self, attr, v)
+        if self.auth == "supabase" and not (self.supabase_url and self.supabase_anon_key and self.allowed_emails):
+            raise ValueError("AUTH=supabase needs SUPABASE_URL, SUPABASE_ANON_KEY and ALLOWED_EMAILS "
+                             "(addresses, or @domain for a whole domain)")
 
     def notify_customer(self):
         """auto: email the customer only for real postage (live EasyPost with a production EZAK key).

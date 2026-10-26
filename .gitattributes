@@ -1,0 +1,6 @@
+* text=auto
+# server files must keep Linux line endings, whatever OS they were edited on
+*.sh text eol=lf
+*.service text eol=lf
+Caddyfile text eol=lf
+env.example text eol=lf

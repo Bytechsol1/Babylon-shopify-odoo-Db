@@ -1,0 +1,10 @@
+# HTTPS in front of the app. Caddy gets and renews the certificate for {DOMAIN} by itself.
+{DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:8000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+}

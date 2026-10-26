@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Boxes, ChevronDown, Gift, LayoutGrid, ListOrdered, PanelLeftClose, Plus, RefreshCw, RotateCcw, ScanLine, Search,
+  Boxes, ChevronDown, Gift, LayoutGrid, ListOrdered, LogOut, PanelLeftClose, Plus, RefreshCw, RotateCcw, ScanLine, Search,
 } from "lucide-react";
 import { SCENARIOS } from "../lane.js";
 import { Menu } from "./ui.jsx";
@@ -51,7 +51,7 @@ export function Rail({ page, setPage, toPack, open, setOpen }) {
   );
 }
 
-export function Topbar({ title, sub, cfg, search, setSearch, act, busy }) {
+export function Topbar({ title, sub, cfg, search, setSearch, act, busy, user, onSignOut }) {
   const store = cfg?.shopify === "live" ? (cfg.shop || "Shopify").replace(".myshopify.com", "") : null;
   const shadow = store && cfg.claims === "shadow";
   return (
@@ -87,6 +87,16 @@ export function Topbar({ title, sub, cfg, search, setSearch, act, busy }) {
           <button className="menu-item" onClick={act.sample}><Gift size={14} />Free sample</button>
           <button className="menu-item" onClick={act.sync}><RefreshCw size={14} />Sync stock to Shopify</button>
           <button className="menu-item danger" onClick={act.reset}><RotateCcw size={14} />Reset demo data</button>
+        </Menu>
+      )}
+      {user && (
+        <Menu button={({ toggle }) => (
+          <button className="avatar" onClick={toggle} aria-label={`Signed in as ${user}`} title={user}>{user[0].toUpperCase()}</button>
+        )}>
+          <p className="menu-label">Signed in as</p>
+          <p className="menu-user">{user}</p>
+          <hr />
+          <button className="menu-item" onClick={onSignOut}><LogOut size={14} />Sign out</button>
         </Menu>
       )}
     </header>

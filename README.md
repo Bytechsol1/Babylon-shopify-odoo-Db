@@ -23,7 +23,7 @@ python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\
 pip install -r requirements.txt
 uvicorn app.main:app --port 8000                       # one worker: the per-order locks live in this process
 # open http://localhost:8000
-pytest                                                  # 79 tests
+pytest                                                  # 86 tests
 ```
 
 The screen is a React app in `frontend/`. Its build is already in `app/static`, so running the station needs only
@@ -77,6 +77,35 @@ Bad lots to try at the scanner: `L2504-X` is expired. Scanning a later-expiry lo
    (`/webhooks/shopify/orders-create` and so on). Without one, set `POLL_SECONDS=60` and new orders are picked up
    by polling. The live check at the label still catches cancels and edits.
 6. Put `SYNC_SECONDS=300` to mirror Odoo stock into the Babylon location every 5 minutes.
+
+## Deploy: Supabase + AWS Lightsail + Vercel
+
+```
+Vercel (the screen) ──/api──▶ Lightsail (Python, HTTPS via Caddy) ──▶ Supabase Postgres (schema "babylon")
+        └──── sign-in with Supabase Auth ──────┘                       Shopify
+```
+
+**Supabase**
+1. Authentication → Sign In / Providers: turn **off** "Allow new users to sign up". Add people with **Invite user**.
+2. Authentication → URL Configuration: set **Site URL** to the Vercel address (invite and sign-in links return there).
+3. The app creates its own tables in the `babylon` schema on first start. That schema is not exposed through
+   Supabase's public API; row level security is on as well.
+
+**Lightsail** (Ubuntu 24.04, same AWS region as the Supabase project, 1 GB RAM is enough)
+1. Attach a static IP, and open ports 80 and 443 in the instance's networking tab.
+2. Point a DNS name at the static IP (or use `<ip-with-dashes>.sslip.io` until there is one).
+3. `git clone` this repo, then `sudo bash deploy/lightsail/setup.sh <that-domain>`.
+4. Fill in `/opt/babylon/.env` (template: `deploy/lightsail/env.example`), then `sudo systemctl restart babylon`.
+5. Updates: `sudo bash /opt/babylon/deploy/lightsail/update.sh`. Logs: `sudo journalctl -u babylon -f`.
+
+Moving the local test-store data across (once, with the local server stopped):
+`python scripts/copy_sqlite_to_postgres.py var/test-store.db "<DATABASE_URL>"`
+
+**Vercel**: import the repo with **Root Directory = `frontend`**, and replace `BACKEND_HOST` in
+`frontend/vercel.json` with the Lightsail domain. Vercel forwards `/api` there, so there is no cross-site setup.
+
+Only **one** server may poll a given store into a given database. Stop the laptop's server once Lightsail is live.
+Tests can run against Postgres too: `TEST_DATABASE_URL=postgresql://... pytest` (uses its own `babylon_test` schema).
 
 ## Built for volume
 
@@ -134,5 +163,5 @@ app/shipping.py      mock labels and EasyPost
 app/zpl.py           ZPL builder and raw port-9100 print
 app/main.py          API, webhooks, test controls
 frontend/            pack station screen (React). `npm run build` writes it into app/static
-tests/               79 tests: every scenario above, plus concurrency, polling and scale (tests/test_qa.py)
+tests/               86 tests: every scenario above, plus concurrency, polling, scale (test_qa.py) and logins (test_auth.py)
 ```

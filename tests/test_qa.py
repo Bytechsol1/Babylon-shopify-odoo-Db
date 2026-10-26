@@ -244,7 +244,9 @@ def test_a_mistyped_mode_stops_the_app(monkeypatch):
 
 
 # ------------------------------------------------------------ storage and API
+@pytest.mark.skipif(bool(settings.database_url), reason="SQLite file upgrade; Postgres creates its schema fresh")
 def test_old_databases_are_upgraded_in_place(tmp_path, monkeypatch):
+    from app import store_sqlite
     path = tmp_path / "old.db"
     c = sqlite3.connect(path)
     c.executescript(
@@ -255,12 +257,14 @@ def test_old_databases_are_upgraded_in_place(tmp_path, monkeypatch):
     c.commit()
     c.close()
     monkeypatch.setattr(settings, "db_path", str(path))
-    monkeypatch.setattr(db, "_conn", None)
+    monkeypatch.setattr(store_sqlite, "_conn", None)
     try:
-        assert db.count_claimed_on("2026-10-26") == 1
-        assert [o["id"] for o in db.list_orders(q="ann")] == ["a"]
+        assert store_sqlite.count_claimed_on("2026-10-26") == 1
+        assert [o["id"] for o in store_sqlite.list_orders(q="ann")] == ["a"]
+        store_sqlite.log("a", "check")  # the history table gained the actor column too
+        assert store_sqlite.events("a")[-1]["actor"] == "system"
     finally:
-        db._conn.close()
+        store_sqlite._conn.close()
 
 
 def test_lists_are_paged_searched_and_slim():

@@ -1,0 +1,22 @@
+[Unit]
+Description=Babylon pack station (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=babylon
+Group=babylon
+WorkingDirectory=/opt/babylon
+# One worker on purpose: the per-order locks live in this process.
+ExecStart=/opt/babylon/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=always
+RestartSec=3
+# hardening: read-only system, private /tmp, writes only to the app's var/ folder
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/babylon/var
+
+[Install]
+WantedBy=multi-user.target

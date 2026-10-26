@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { fileUrl } from "../api.js";
 import {
   Box, Check, CircleCheck, CircleX, Download, Eye, FileText, FlaskConical, Printer, Scale, ScanLine, Truck, Undo2, X,
 } from "lucide-react";
@@ -73,7 +74,8 @@ export default function OrderView({ o, cfg, stock, act, busy }) {
         <Info title="History">
           <ol className="timeline">
             {(o.events || []).slice().reverse().map((e, i) => (
-              <li key={i}><time>{e.ts.slice(11, 16)}</time><span>{e.detail || e.kind.replace(/_/g, " ")}</span></li>
+              <li key={i}><time>{e.ts.slice(11, 16)}</time><span>{e.detail || e.kind.replace(/_/g, " ")}
+                {e.actor && e.actor !== "system" && <small className="by">by {e.actor}</small>}</span></li>
             ))}
           </ol>
         </Info>
@@ -249,23 +251,39 @@ function Shipped({ o }) {
 }
 
 // The Zebra prints straight from the station; until it's set up, view the label or print it as a PDF.
+// Label files are fetched with the sign-in token (a plain link can't carry it), then shown or opened.
 function LabelActions({ o }) {
   const [show, setShow] = useState(false);
+  const [err, setErr] = useState(null);
   const base = `/api/orders/${encodeURIComponent(o.id)}/label`;
+  const openPdf = async () => {
+    setErr(null);
+    const tab = window.open("", "_blank");  // opened now, inside the click, so the browser doesn't block it
+    try { tab.location = await fileUrl(`${base}.pdf`); } catch (e) { tab?.close(); setErr(e.message); }
+  };
+  const downloadZpl = async () => {
+    setErr(null);
+    try {
+      const a = Object.assign(document.createElement("a"), { href: await fileUrl(`${base}.zpl`), download: `label-${o.name.replace(/\W/g, "")}.zpl` });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    } catch (e) { setErr(e.message); }
+  };
   return (
     <div className="label-box">
       <div className="inline">
         <span className="muted">Label</span>
         <button className="btn sm" onClick={() => setShow(!show)}><Eye size={14} /> {show ? "Hide label" : "View label"}</button>
-        <a className="btn sm" href={`${base}.pdf`} target="_blank" rel="noreferrer"><FileText size={14} /> Print (PDF)</a>
-        <a className="btn sm ghost" href={`${base}.zpl`}><Download size={14} /> Download ZPL</a>
+        <button className="btn sm" onClick={openPdf}><FileText size={14} /> Print (PDF)</button>
+        <button className="btn sm ghost" onClick={downloadZpl}><Download size={14} /> Download ZPL</button>
       </div>
       <p className="hint">{o.label.print?.startsWith("sent to") ? `Sent to the Zebra (${o.label.print.slice(8)}).`
         : "No Zebra printer is connected, so the label was saved as a file. Use Print (PDF) to print it on any printer."}</p>
+      {err && <p className="hint bad">{err}</p>}
       <AnimatePresence>
         {show && (
           <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-            <LabelImage src={`${base}.png`} />
+            <LabelImage path={`${base}.png`} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -273,14 +291,18 @@ function LabelActions({ o }) {
   );
 }
 
-function LabelImage({ src }) {
-  const [state, setState] = useState("loading");
+function LabelImage({ path }) {
+  const [src, setSrc] = useState(null);
+  const [failed, setFailed] = useState(null);
+  useEffect(() => {
+    let url = null, gone = false;
+    fileUrl(path).then(u => { url = u; if (!gone) setSrc(u); else URL.revokeObjectURL(u); }).catch(e => !gone && setFailed(e.message));
+    return () => { gone = true; if (url) URL.revokeObjectURL(url); };
+  }, [path]);
   return (
     <div className="label-preview">
-      {state === "loading" && <p className="hint">Drawing the label…</p>}
-      {state === "failed" ? <p className="hint">The preview needs internet access (it uses labelary.com). The label file is in var/labels.</p>
-        : <img src={src} alt="Shipping label" onLoad={() => setState("ok")} onError={() => setState("failed")}
-               style={{ display: state === "ok" ? "block" : "none" }} />}
+      {failed ? <p className="hint">{failed}</p>
+        : src ? <img src={src} alt="Shipping label" /> : <p className="hint">Drawing the label…</p>}
     </div>
   );
 }

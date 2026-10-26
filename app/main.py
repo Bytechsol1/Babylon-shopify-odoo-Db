@@ -10,7 +10,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from . import clock, db, packaging, pipeline
+from starlette.concurrency import run_in_threadpool
+from . import audit, auth, clock, db, packaging, pipeline
 from .config import settings
 from .pipeline import Refuse
 from .services import odoo, shopify, deposco
@@ -47,6 +48,37 @@ if (STATIC / "assets").is_dir():  # the React build (frontend/, `npm run build`)
 @app.exception_handler(Refuse)
 def _refuse(_, e: Refuse):
     return JSONResponse(status_code=e.status, content={"detail": {"message": e.message, "checks": e.checks}})
+
+
+PUBLIC_API = {"/api/public-config"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """With AUTH=supabase every /api call needs a signed-in, allowed user; who it was goes into the audit log.
+    Webhooks are checked by their Shopify signature instead, and the page itself is public (it shows the login)."""
+    path = request.url.path
+    if settings.auth != "supabase" or not path.startswith("/api/") or path in PUBLIC_API:
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    try:
+        email = await run_in_threadpool(auth.verify, token)
+    except auth.AuthError as e:
+        return JSONResponse(status_code=401, content={"detail": str(e)})
+    mark = audit.actor.set(email)
+    try:
+        return await call_next(request)
+    finally:
+        audit.actor.reset(mark)
+
+
+@app.get("/api/public-config")
+def public_config():
+    """What the browser needs before anyone signs in. The anon key is public by design."""
+    on = settings.auth == "supabase"
+    return {"auth": settings.auth, "supabase_url": settings.supabase_url if on else "",
+            "supabase_anon_key": settings.supabase_anon_key if on else ""}
 
 
 @app.get("/")

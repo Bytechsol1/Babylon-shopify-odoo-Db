@@ -16,7 +16,7 @@ const SUBTITLES = {
   stock: "Babylon's San Jose warehouse",
 };
 
-export default function App() {
+export default function App({ user, onSignOut }) {
   const [page, setPage] = useState("dashboard");
   const [cfg, setCfg] = useState(null);
   const [summary, setSummary] = useState(null);  // dashboard counts, low stock, recent orders
@@ -168,7 +168,7 @@ export default function App() {
     <div className="shell">
       <Rail page={page} setPage={setPage} toPack={summary?.to_pack || 0} open={menuOpen} setOpen={toggleMenu} />
       <div className="main">
-        <Topbar title={PAGES.find(p => p.key === page).label} sub={SUBTITLES[page]} cfg={cfg}
+        <Topbar title={PAGES.find(p => p.key === page).label} sub={SUBTITLES[page]} cfg={cfg} user={user} onSignOut={onSignOut}
                 search={search} setSearch={v => { setSearch(v); if (v && page === "dashboard") setPage("orders"); }}
                 act={act} busy={busy} />
         <AnimatePresence mode="wait">
