@@ -1,0 +1,16 @@
+# secrets: Shopify client secret, store settings
+.env
+.env.*
+!.env.example
+
+# local data: orders with customer names and addresses, printed labels
+var/*.db
+var/*.db-*
+var/labels/
+
+# tooling
+frontend/node_modules/
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
