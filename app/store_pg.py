@@ -14,7 +14,7 @@ from . import audit
 from .config import settings
 
 __all__ = ["now_iso", "get_order", "save_order", "list_orders", "count_by_status", "count_claimed_on",
-           "log", "events", "kv_get", "kv_set", "kv_update", "next_seq", "wipe"]
+           "log", "events", "events_of_kind", "kv_get", "kv_set", "kv_update", "next_seq", "wipe"]
 
 if not re.fullmatch(r"[a-z_][a-z0-9_]*", settings.db_schema):
     raise ValueError(f"DB_SCHEMA={settings.db_schema!r} must be a plain lower-case identifier")
@@ -54,6 +54,7 @@ def _setup(c):
       CREATE INDEX IF NOT EXISTS orders_name_trgm ON {ORDERS} USING gin (name {ops});
       CREATE INDEX IF NOT EXISTS orders_customer_trgm ON {ORDERS} USING gin (customer {ops});
       CREATE INDEX IF NOT EXISTS events_order ON {EVENTS}(order_id, id);
+      CREATE INDEX IF NOT EXISTS events_kind ON {EVENTS}(kind, id);
     """)
 
 
@@ -143,6 +144,13 @@ def events(order_id, limit=200):
     rows = _all(f"SELECT ts, kind, detail, actor FROM {EVENTS} WHERE order_id = %s ORDER BY id DESC LIMIT %s",
                 (order_id, limit))
     return [{"ts": r[0], "kind": r[1], "detail": r[2], "actor": r[3]} for r in reversed(rows)]
+
+
+def events_of_kind(kinds, limit=200):
+    """The latest events of these kinds across all orders, newest first (e.g. package overrides)."""
+    rows = _all(f"SELECT order_id, ts, kind, detail, actor FROM {EVENTS} WHERE kind = ANY(%s) ORDER BY id DESC LIMIT %s",
+                (list(kinds), limit))
+    return [{"order_id": r[0], "ts": r[1], "kind": r[2], "detail": r[3], "actor": r[4]} for r in rows]
 
 
 def kv_get(key):

@@ -19,12 +19,13 @@ def make(items, **kw):
     return pipeline.ingest_order(gid)
 
 
-def pack_ready(o, lots, weight=6.0, bin_code=None):
+def pack_ready(o, lots, weight=None, bin_code=None):
+    """Scan the lots, use the suggested package, and weigh what pack-out expects (unless told otherwise)."""
     for lot in lots:
         pipeline.scan_lot(o["id"], lot)
     o = db.get_order(o["id"])
-    pipeline.set_package(o["id"], bin_code or o["package"]["bin"])
-    return pipeline.set_weight(o["id"], weight)
+    o = pipeline.set_package(o["id"], bin_code or o["package"]["bin"], None if not bin_code else "too big")
+    return pipeline.set_weight(o["id"], weight if weight is not None else o["package"]["expected_oz"])
 
 
 # ---------------------------------------------------------------- claim
@@ -205,10 +206,12 @@ def test_expired_lot_is_rejected():
 
 
 def test_package_rules():
-    assert make([(SER, 1), (LIP, 1)])["package"]["bin"] == "BX-S"       # glass -> box
-    assert make([(LIP, 1)])["package"]["bin"] == "PM-0"                  # small plastic -> #0 mailer
-    assert make([(MST, 1)])["package"]["bin"] == "PM-2"                  # a full-size pump -> #2 mailer
-    assert make([(SER, 1), (CRM, 1)])["package"]["bin"] == "BX-S"
+    glass = make([(SER, 1), (LIP, 1)])["package"]
+    assert glass["type"] == "box" and glass["protection"] == "box"                     # glass -> box only
+    assert "Wrap 1 glass item in bubble" in glass["instructions"]
+    assert make([(LIP, 1)])["package"]["bin"] == "PL-1"                                 # safe -> cheapest: poly mailer
+    pump = make([(MST, 1)])["package"]
+    assert pump["type"] == "mailer" and "Bag liquids and clip pumps shut" in pump["instructions"]  # care -> padded
     assert make([(SER, 1), (CRM, 1), (LIP, 1)])["package"]["bubble"] == 2
 
 
@@ -221,11 +224,13 @@ def test_cannot_package_or_weigh_before_the_pick_is_done():
 def test_override_is_logged_and_packaging_stock_counts_down():
     o = make([(LIP, 1)])
     pipeline.scan_lot(o["id"], "L2609-L")
-    out = pipeline.set_package(o["id"], "BX-M")
-    assert out["package"]["override"]
-    assert any(e["kind"] == "package_override" for e in db.events(o["id"]))
+    with pytest.raises(Refuse, match="Pick a reason"):
+        pipeline.set_package(o["id"], "BX-9X6X3")  # not the suggestion: needs a reason
+    out = pipeline.set_package(o["id"], "BX-9X6X3", "out of stock")
+    assert out["package"]["override"] and out["package"]["override_reason"] == "out of stock"
+    assert any(e["kind"] == "package_override" and "out of stock" in e["detail"] for e in db.events(o["id"]))
     from app import packaging
-    assert packaging.stock()["BX-M"] == 149
+    assert packaging.stock()["BX-9X6X3"] == 149
 
 
 # ---------------------------------------------------------------- label and close
@@ -434,7 +439,7 @@ ADDR = {"name": "Client A", "address1": "5 Main St", "city": "Austin", "state": 
 
 def test_sample_ships_without_touching_shopify():
     s = pipeline.create_sample({"address": ADDR, "items": [{"sku": SMP, "qty": 3}]})
-    assert s["id"] == "SMP-0001" and s["package"]["bin"] == "PM-0"
+    assert s["id"] == "SMP-0001" and s["package"]["bin"] == "PL-1"
     s = pack_ready(s, ["L2610-S"] * 3, weight=1.0)
     s = pipeline.close_order(pipeline.request_label(s["id"])["id"])
     assert s["status"] == "shipped" and shopify.s["fulfillments"] == []
@@ -471,7 +476,7 @@ def test_http_flow_with_gid_in_the_path():
     from urllib.parse import quote
     oid = quote(o["id"], safe="")
     assert c.post(f"/api/orders/{oid}/scan", json={"code": "L2609-L"}).json()["order"]["pick_done"]
-    assert c.post(f"/api/orders/{oid}/package", json={"code": "PM-0"}).status_code == 200
+    assert c.post(f"/api/orders/{oid}/package", json={"code": o["package"]["bin"]}).status_code == 200
     assert c.post(f"/api/orders/{oid}/weight", json={"oz": 1.5}).json()["ready_for_label"]
     assert c.post(f"/api/orders/{oid}/label").json()["status"] == "labeled"
     assert c.post(f"/api/orders/{oid}/close").json()["status"] == "shipped"

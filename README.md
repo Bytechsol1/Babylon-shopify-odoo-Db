@@ -23,7 +23,7 @@ python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\
 pip install -r requirements.txt
 uvicorn app.main:app --port 8000                       # one worker: the per-order locks live in this process
 # open http://localhost:8000
-pytest                                                  # 89 tests
+pytest                                                  # 110 tests
 ```
 
 The screen is a React app in `frontend/`. Its build is already in `app/static`, so running the station needs only
@@ -77,6 +77,24 @@ Bad lots to try at the scanner: `L2504-X` is expired. Scanning a later-expiry lo
    (`/webhooks/shopify/orders-create` and so on). Without one, set `POLL_SECONDS=60` and new orders are picked up
    by polling. The live check at the label still catches cancels and edits.
 6. Put `SYNC_SECONDS=300` to mirror Odoo stock into the Babylon location every 5 minutes.
+
+## Build plan (Cody, Oct 30 2026): what's in
+
+See `Babylon Pack Station Build Plan.md`. Built so far:
+
+- **Pack-out** (`app/packaging.py`): the package is chosen at claim time from packaging **in stock**: protection
+  class (safe / care / box only), 3D box fit, mailer rule, cheapest including estimated postage. **Claim check 7**:
+  no package in stock fits → the order stays with UFSI. Packers get wrap/bag/clip/fill instructions and an
+  expected weight. Using another package needs a reason; the weigh step refuses a weight outside the tolerance
+  unless a lead accepts it with a reason. Both kinds of override are listed on the Stock page for the weekly review.
+  Packaging list, counts and settings are data: Stock page → Packaging (or `PUT /api/packaging/{code}`,
+  `PUT /api/packout/settings`). The demo list is Cody's six box sizes plus mailers, with placeholder costs.
+- **No lot, no label**: the label is refused unless every unit has a scanned lot; lots are stored per shipment line.
+- **Deposco fails closed** on any lookup error or timeout (still no live Deposco: needs UFSI access).
+- **Cancels within seconds**: order webhooks (create, updated, edited, cancelled), signed with the app's client
+  secret. Register them once per store: `python scripts/register_webhooks.py https://<station address>`.
+  Polling stays on as the backup.
+- **Daily claim cap** shown in `/api/config` and the header ("Claimed today N of cap").
 
 ## Deploy: Supabase + AWS Lightsail + Vercel
 
@@ -171,5 +189,5 @@ app/shipping.py      mock labels and EasyPost
 app/zpl.py           ZPL builder and raw port-9100 print
 app/main.py          API, webhooks, test controls
 frontend/            pack station screen (React). `npm run build` writes it into app/static
-tests/               89 tests: every scenario above, plus concurrency, polling, scale (test_qa.py) and logins (test_auth.py)
+tests/               110 tests: every scenario above, plus concurrency, polling, scale (test_qa.py) and logins (test_auth.py)
 ```

@@ -21,11 +21,11 @@ def make(items, **kw):
     return pipeline.ingest_order(shopify.create_order([{"sku": s, "qty": q, "title": s} for s, q in items], **kw))
 
 
-def pack_ready(o, lots, weight=6.0):
+def pack_ready(o, lots, weight=None):
     for lot in lots:
         pipeline.scan_lot(o["id"], lot)
-    pipeline.set_package(o["id"], db.get_order(o["id"])["package"]["bin"])
-    return pipeline.set_weight(o["id"], weight)
+    o = pipeline.set_package(o["id"], db.get_order(o["id"])["package"]["bin"])
+    return pipeline.set_weight(o["id"], weight if weight is not None else o["package"]["expected_oz"])
 
 
 def run_together(fns):
@@ -53,9 +53,9 @@ def test_two_orders_racing_for_the_last_units_never_oversell():
 
 
 def test_packaging_count_is_exact_under_concurrent_packers():
-    start = packaging.stock()["BX-S"]
-    run_together([lambda: packaging.take("BX-S") for _ in range(40)])
-    assert packaging.stock()["BX-S"] == start - 40
+    start = packaging.stock()["BX-7X3X3"]
+    run_together([lambda: packaging.take("BX-7X3X3") for _ in range(40)])
+    assert packaging.stock()["BX-7X3X3"] == start - 40
 
 
 def test_a_webhook_racing_a_poll_claims_once():
@@ -68,7 +68,7 @@ def test_a_webhook_racing_a_poll_claims_once():
 def test_cannot_weigh_an_order_that_is_already_done():
     o = make([(LIP, 1)])
     pipeline.scan_lot(o["id"], "L2609-L")
-    pipeline.set_package(o["id"], "PM-0")
+    pipeline.set_package(o["id"], "PL-1")
     shopify.cancel(o["id"])
     pipeline.handle_cancel(o["id"])
     with pytest.raises(Refuse, match="cancelled"):
@@ -79,20 +79,20 @@ def test_cannot_weigh_an_order_that_is_already_done():
 def test_cancel_after_packing_puts_the_box_back():
     o = make([(LIP, 1)])
     pipeline.scan_lot(o["id"], "L2609-L")
-    before = packaging.stock()["PM-0"]
-    pipeline.set_package(o["id"], "PM-0")
+    before = packaging.stock()["PL-1"]
+    pipeline.set_package(o["id"], "PL-1")
     shopify.cancel(o["id"])
     pipeline.handle_cancel(o["id"])
-    assert packaging.stock()["PM-0"] == before
+    assert packaging.stock()["PL-1"] == before
 
 
 def test_scanning_the_same_box_twice_takes_one_box():
     o = make([(LIP, 1)])
     pipeline.scan_lot(o["id"], "L2609-L")
-    before = packaging.stock()["PM-0"]
-    pipeline.set_package(o["id"], "PM-0")
-    pipeline.set_package(o["id"], "PM-0")
-    assert packaging.stock()["PM-0"] == before - 1
+    before = packaging.stock()["PL-1"]
+    pipeline.set_package(o["id"], "PL-1")
+    pipeline.set_package(o["id"], "PL-1")
+    assert packaging.stock()["PL-1"] == before - 1
 
 
 def test_failed_hand_back_changes_nothing(monkeypatch):
@@ -165,7 +165,7 @@ def test_poll_does_not_refetch_unchanged_orders(monkeypatch):
 def test_poll_does_not_mistake_its_own_move_for_an_edit():
     o = make([(LIP, 1)])  # the claim moved the order, which changed Shopify's updatedAt
     pipeline.scan_lot(o["id"], "L2609-L")
-    pipeline.set_package(o["id"], "PM-0")
+    pipeline.set_package(o["id"], "PL-1")
     pipeline.set_weight(o["id"], 1.5)
     pipeline.poll_recent()
     assert not db.get_order(o["id"]).get("attention")

@@ -70,6 +70,12 @@ export function Topbar({ title, sub, cfg, search, setSearch, act, busy, user, on
           <i />{!store ? "Demo data" : `${store} · ${shadow ? "watching only" : "taking orders"}`}
         </span>
       )}
+      {cfg && (
+        <span className={"import" + (cfg.daily_cap > 0 && cfg.claimed_today >= cfg.daily_cap ? " cap-hit" : "")}
+              title={cfg.daily_cap > 0 ? "Orders claimed today against the daily cap" : "No daily claim cap is set"}>
+          Claimed today {cfg.claimed_today ?? 0}{cfg.daily_cap > 0 ? ` of ${cfg.daily_cap}` : ""}
+        </span>
+      )}
       {cfg && <span className="import" title="UFSI imports new Shopify orders every hour, on the hour">UFSI import in {Math.round(cfg.minutes_to_import)}m</span>}
       {cfg?.dev_tools && (
         <Menu button={({ toggle }) => (

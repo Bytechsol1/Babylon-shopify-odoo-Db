@@ -122,8 +122,8 @@ export default function App({ user, onSignOut }) {
       const r = await post("scan", { code });
       return r.warning ? [r.warning, "warn"] : null;
     }),
-    pack: code => run(async () => { await post("package", { code }); }),
-    weigh: oz => run(async () => { await post("weight", { oz }); }),
+    pack: (code, reason) => run(async () => { await post("package", { code, reason: reason || null }); }),
+    weigh: (oz, overrideReason) => run(async () => { await post("weight", { oz, override_reason: overrideReason || null }); }),
     label: () => run(async () => { await post("label"); return "Label bought and sent to the printer"; }),
     reprint: () => run(async () => { await post("reprint"); return "Sent to the printer again"; }),
     ship: () => run(async () => { await post("close"); return "Shipped"; }),
@@ -154,6 +154,15 @@ export default function App({ user, onSignOut }) {
       if (!confirm("Wipe all demo orders and reset stock?")) return null;
       await api("/api/dev/reset", "POST"); setSelId(null); setDetail(null); return "Demo data reset";
     }),
+    savePackage: (code, body, qty, done) => run(async () => {
+      await api(`/api/packaging/${enc(code)}`, "PUT", body);
+      await api(`/api/packaging/${enc(code.toUpperCase())}/count`, "PUT", { qty });
+      done?.(); return `${body.name} saved`;
+    }),
+    deletePackage: (code, done) => run(async () => {
+      if (!confirm(`Remove ${code} from the packaging list? Orders already packed in it are not affected.`)) return null;
+      await api(`/api/packaging/${enc(code)}`, "DELETE"); done?.(); return `${code} removed`;
+    }),
     sample: () => setSampleOpen(true),
     createSample: body => run(async () => {
       const o = await api("/api/samples", "POST", body);
@@ -176,7 +185,7 @@ export default function App({ user, onSignOut }) {
             {page === "dashboard" && <Dashboard summary={summary} stock={stock} open={open} go={setPage} />}
             {page === "pack" && <Pack queue={shownQueue} detail={detail} selId={selId} cfg={cfg} stock={stock} act={act} busy={busy} />}
             {page === "orders" && <Orders q={search.trim()} tick={tick} counts={summary?.counts || {}} open={open} />}
-            {page === "stock" && <Stock stock={stock} />}
+            {page === "stock" && <Stock stock={stock} act={act} tick={tick} />}
           </motion.div>
         </AnimatePresence>
       </div>

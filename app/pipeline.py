@@ -52,8 +52,11 @@ def lines_hash(o):
     return hashlib.sha1(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
 
-def _claimed_today():
+def claimed_today():
     return db.count_claimed_on(clock.now().date().isoformat())
+
+
+_claimed_today = claimed_today
 
 
 def _build_pick(need, old=None):
@@ -67,8 +70,12 @@ def _build_pick(need, old=None):
 
 
 def _suggest(need):
-    items = [(odoo.product(s), q) for s, q in need.items()]
-    return dict(packaging.suggest(items), scanned=None, override=False)
+    """The package pack-out picks from what's in stock, or None if nothing in stock fits."""
+    sug = packaging.suggest([(odoo.product(s), q) for s, q in need.items()])
+    return dict(sug, scanned=None, override=False) if sug else None
+
+
+PACKAGE_CHECK = "A package in stock fits this order"
 
 
 def _units(o):
@@ -129,15 +136,18 @@ def _decide(rec, o):
                lines_hash=lines_hash(o), fo_id=o["fo_id"], seen=_signature(o))
     d = evaluate(o, odoo, settings, claimed_today=_claimed_today())
     rec["checks"] = d["checks"]
-    if not d["eligible"]:
-        db.log(gid, "decision", "Stays with UFSI. " + _failed(d["checks"]))
+    need = leaf_needs(odoo, o["lines"])
+    pkg = _suggest(need) if d["eligible"] else None
+    if d["eligible"]:  # claim check 7: Babylon only takes what it can also box
+        rec["checks"].append({"key": "package", "ok": pkg is not None, "text": PACKAGE_CHECK})
+    if not d["eligible"] or pkg is None:
+        db.log(gid, "decision", "Stays with UFSI. " + _failed(rec["checks"]))
         _send_to_ufsi_if_routed_here(rec, o)
         return db.save_order(rec)
     if settings.claim_mode != "live":
         rec["status"] = "shadow"
-        db.log(gid, "decision", "Shadow mode: would claim for Babylon. Nothing was changed.")
+        db.log(gid, "decision", f"Shadow mode: would claim for Babylon, in {pkg['name']}. Nothing was changed.")
         return db.save_order(rec)
-    need = leaf_needs(odoo, o["lines"])
     if not odoo.reserve(gid, need):
         rec["checks"].append({"key": "reserve", "ok": False, "text": "Could not reserve stock in Odoo"})
         db.log(gid, "decision", "Stays with UFSI. Odoo could not reserve the stock.")
@@ -154,7 +164,7 @@ def _decide(rec, o):
         db.log(gid, "claim_failed", str(e))
         return db.save_order(rec)
     rec.update(status="queued", claim_route=route, claimed_day=clock.now().date().isoformat(),
-               pick=_build_pick(need), package=_suggest(need))
+               pick=_build_pick(need), package=pkg)
     db.log(gid, "claimed", "Claimed for Babylon" + (" (moved with fulfillmentOrderMove)" if route == "move"
                                                      else " (Shopify routing had already assigned it)"))
     return db.save_order(rec)
@@ -237,6 +247,11 @@ def recheck_order(gid):
     return sync_order(gid)
 
 
+def on_order_changed(gid):
+    """orders/updated and orders/edited webhooks: take the order in if it's new, else sync it."""
+    return ingest_order(gid, "webhook") if db.get_order(gid) is None else sync_order(gid)
+
+
 def poll_recent():
     """Takes in new orders and syncs changed ones. Asks Shopify only for orders updated since the last poll
     (all pages), and fetches an order only when its updatedAt moved. The mark advances only when every
@@ -295,9 +310,14 @@ def handle_edit(gid, fresh=None):
         d = evaluate(fresh, odoo, settings, check_margin=False)
         o["checks"] = d["checks"]
         need = leaf_needs(odoo, fresh["lines"]) if d["eligible"] else None
+        pkg = _suggest(need) if d["eligible"] else None
         try:
             if not d["eligible"]:
                 _release_to_ufsi(o, "Edited order is no longer eligible, released to UFSI. " + _failed(d["checks"]))
+                return db.save_order(o)
+            if pkg is None:
+                o["checks"].append({"key": "package", "ok": False, "text": PACKAGE_CHECK})
+                _release_to_ufsi(o, "Edited order no longer fits any package in stock, released to UFSI")
                 return db.save_order(o)
             if not odoo.reserve(gid, need):
                 _release_to_ufsi(o, "Edited order could not be reserved, released to UFSI")
@@ -308,7 +328,7 @@ def handle_edit(gid, fresh=None):
             db.log(gid, "edited", o["attention"])
             return db.save_order(o)
         o.update(lines=fresh["lines"], address=fresh["address"], lines_hash=lines_hash(fresh),
-                 pick=_build_pick(need, o["pick"]), package=_suggest(need))
+                 pick=_build_pick(need, o["pick"]), package=pkg)
         db.log(gid, "edited", "Edited order re-checked: still eligible, pick list updated")
         return db.save_order(o)
 
@@ -387,6 +407,9 @@ def create_sample(data):
     bad = [s for s in need if not odoo.product(s)]
     if bad:
         raise Refuse(400, "Unknown SKU: " + ", ".join(bad))
+    pkg = _suggest(need)
+    if pkg is None:
+        raise Refuse(409, "No package in stock fits this sample. Split it into smaller samples or restock packaging.")
     sid = f"SMP-{db.next_seq('sample'):04d}"
     while db.get_order(sid):  # samples made before the counter existed
         sid = f"SMP-{db.next_seq('sample'):04d}"
@@ -394,7 +417,7 @@ def create_sample(data):
         raise Refuse(409, "Not enough stock in Odoo for this sample")
     rec = {"id": sid, "name": sid, "kind": "sample", "status": "queued", "created_at": db.now_iso(),
            "address": addr, "shipping_method": "Ground", "lines": lines, "lines_hash": "", "fo_id": None,
-           "checks": [], "pick": _build_pick(need), "package": _suggest(need), "weight_oz": None, "label": None,
+           "checks": [], "pick": _build_pick(need), "package": pkg, "weight_oz": None, "label": None,
            "note": str(data.get("note") or ""), "email": str(data.get("email") or "")}
     db.log(sid, "sample", "Sample entered. It never becomes a Shopify order, so UFSI can't see it.")
     return db.save_order(rec)
@@ -470,10 +493,13 @@ def stand_down(oid):
         return view(db.save_order(o))
 
 
-def set_package(oid, bin_code):
+def set_package(oid, bin_code, reason=None):
+    """The packer scans the package. Anything other than the suggestion needs a reason, which is logged so
+    sizes and settings can be tuned from real packs (reviewed weekly)."""
     bin_code = bin_code.strip().upper()
-    if bin_code not in packaging.BINS:
-        raise Refuse(404, f"{bin_code} is not a packaging bin")
+    cat = packaging.catalog()
+    if bin_code not in cat:
+        raise Refuse(404, f"{bin_code} is not a package in the catalog")
     with _lk(oid):
         o = _get(oid)
         if o["status"] not in ("queued", "picking", "packed"):
@@ -481,24 +507,36 @@ def set_package(oid, bin_code):
         if not _pick_done(o):
             raise Refuse(409, "Scan every unit before choosing the package")
         pkg = o["package"]
+        if pkg["bin"] not in cat:  # suggested before the catalog changed: suggest again from today's list
+            fresh = _suggest({p["sku"]: p["need"] for p in o["pick"]}) or {}
+            pkg.update({k: v for k, v in fresh.items() if k not in ("scanned", "override")})
         if pkg.get("scanned") == bin_code:
-            return view(o)  # the same bin scanned twice is not a second box
+            return view(o)  # the same package scanned twice is not a second box
+        override = bin_code != pkg["bin"]
+        if override and reason not in packaging.OVERRIDE_REASONS:
+            raise Refuse(400, f"{cat[bin_code]['name']} isn't the suggested {pkg.get('name', pkg['bin'])}. "
+                              f"Pick a reason: {', '.join(packaging.OVERRIDE_REASONS)}")
         if pkg.get("scanned"):
             packaging.give_back(pkg["scanned"])
         packaging.take(bin_code)
-        pkg["scanned"] = bin_code
-        pkg["override"] = bin_code != pkg["bin"]  # pkg["bin"] is the suggestion
-        pkg["dims"] = packaging.parcel_dims(bin_code, _units(o))
-        if pkg["override"]:
-            db.log(oid, "package_override", f"Suggested {pkg['bin']}, packer used {bin_code}")
+        items = _units(o)
+        pkg.update(scanned=bin_code, override=override, override_reason=reason if override else None,
+                   dims=packaging.parcel_dims(bin_code, items),
+                   expected_oz=packaging.expected_oz(bin_code, items) if override else pkg.get("expected_oz"))
+        pkg["tolerance_oz"] = packaging.tolerance_oz(pkg["expected_oz"]) if pkg.get("expected_oz") is not None else None
+        if override:
+            db.log(oid, "package_override", f"Suggested {pkg['bin']}, packer used {bin_code}: {reason}")
         else:
             db.log(oid, "package", f"{bin_code} scanned")
         if o.get("weight_oz"):
-            o["status"] = "packed"
+            o["weight_oz"] = None  # a different package weighs differently: weigh again
+            o["status"] = "picking"
         return view(db.save_order(o))
 
 
-def set_weight(oid, oz):
+def set_weight(oid, oz, override_reason=None):
+    """A reading outside expected ± tolerance stops the order: it usually means a missing or extra item.
+    A lead can accept it with a reason, which is logged."""
     try:
         oz = float(oz)
     except (TypeError, ValueError):
@@ -509,17 +547,43 @@ def set_weight(oid, oz):
         o = _get(oid)
         if o["status"] not in ("queued", "picking", "packed"):
             raise Refuse(409, f"Order is {o['status']}")
-        if not (o.get("package") or {}).get("scanned"):
+        pkg = o.get("package") or {}
+        if not pkg.get("scanned"):
             raise Refuse(409, "Scan the package bin before weighing")
         if o["label"]:
             raise Refuse(409, "The label is already bought")
+        expected, tol = pkg.get("expected_oz"), pkg.get("tolerance_oz")
+        off = expected is not None and abs(oz - expected) > tol
+        if off and not (override_reason or "").strip():
+            raise Refuse(409, f"Weighs {oz:.1f} oz, expected about {expected:.1f} oz (± {tol:.1f}). "
+                              "Check for a missing or extra item, then weigh again.",
+                         [{"key": "weight", "ok": False, "text": f"Weight within {expected:.1f} ± {tol:.1f} oz"}])
         o["weight_oz"] = round(oz, 1)
+        o["weight_check"] = {"expected_oz": expected, "tolerance_oz": tol, "ok": not off,
+                             "override_reason": override_reason.strip() if off else None}
         o["status"] = "packed"
-        db.log(oid, "weight", f"{o['weight_oz']} oz")
+        if off:
+            db.log(oid, "weight_override", f"{o['weight_oz']} oz, expected {expected} ± {tol}: {override_reason.strip()}")
+        else:
+            db.log(oid, "weight", f"{o['weight_oz']} oz" + (f" (expected {expected})" if expected is not None else ""))
         return view(db.save_order(o))
 
 
 # ------------------------------------------------------------ live check, label, close
+def shipment_lines(o):
+    """What leaves in the parcel, per SKU and lot: [{sku, lot, expiry, qty}]. None if any unit lacks a lot,
+    because then nobody could say which lot reached which customer."""
+    lines = {}
+    for p in o["pick"]:
+        if len(p["picked"]) < p["need"] or any(not x.get("lot") for x in p["picked"]):
+            return None
+        for x in p["picked"][:p["need"]]:
+            key = (p["sku"], x["lot"])
+            line = lines.setdefault(key, {"sku": p["sku"], "lot": x["lot"], "expiry": x.get("expiry"), "qty": 0})
+            line["qty"] += 1
+    return list(lines.values())
+
+
 def live_check(o):
     """Runs when the packer asks for a label. Fails closed: if we can't verify, no label."""
     fresh = shopify.get_order(o["id"])
@@ -533,6 +597,8 @@ def live_check(o):
             checks.append({"key": "deposco", "ok": not in_deposco, "text": "Not in Deposco (looked up by order number--*)"})
     except DeposcoUnavailable as e:
         checks.append({"key": "deposco", "ok": False, "text": f"Could not check Deposco: {e}"})
+    except Exception as e:  # timeouts, bad answers, anything: fail closed, the only guard against shipping twice
+        checks.append({"key": "deposco", "ok": False, "text": f"Could not check Deposco ({type(e).__name__}: {e})"})
     assigned = settings.claim_mode != "live" or fresh["location_id"] == settings.babylon_location_id
     checks += [
         {"key": "assigned", "ok": assigned, "text": "Still assigned to Babylon"},
@@ -551,6 +617,10 @@ def request_label(oid):
             return view(o)
         if o["status"] != "packed" or not _pick_done(o):
             raise Refuse(409, "Scan every unit, scan the package and weigh the parcel first")
+        lines = shipment_lines(o)  # no lot, no label
+        if lines is None:
+            raise Refuse(409, "No lot, no label: every unit needs its finished-goods lot scanned")
+        o["shipment_lines"] = lines
         if o["kind"] == "order":
             try:
                 lc = live_check(o)

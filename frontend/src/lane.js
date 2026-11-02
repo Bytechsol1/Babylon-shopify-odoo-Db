@@ -57,6 +57,8 @@ const FAIL = {
   cancel: "The customer cancelled it", deposco: "UFSI's system already has it",
   assigned: "Shopify moved it back to UFSI", hold: "It was put on hold",
   unchanged: "The items or address changed after picking",
+  package: "No package in stock fits this order", complete: "The order has too many lines to read whole",
+  weight: "The parcel weighs more or less than expected",
 };
 export const reason = c => (c.key === "deposco" && /Could not/.test(c.text)) ? c.text : (FAIL[c.key] || c.text);
 export const failedReasons = checks => (checks || []).filter(c => !c.ok).map(reason);
@@ -99,8 +101,8 @@ export function whyStep(o) {
   if (refused(o)) return "This is the safety net: right before paying for postage, the app re-checks the order. That's how nothing ships twice.";
   return [
     "Each barcode is a batch with an expiry date. Scanning records which batch went to which customer.",
-    "The app picks the cheapest package that keeps the items safe. Glass always goes in a box.",
-    "Postage is priced by weight. The number is an estimate, so confirm it or use the scale.",
+    "Picked from packaging in stock: the cheapest safe option including postage. Glass, compacts and powders always go in a box; pumps and jars can go in a padded mailer if bagged.",
+    "The scale checks the pack: a weight far from the expected one means a missing or extra item. It also prices the postage.",
     "Before paying, the app checks the order is still Babylon's, not cancelled and not changed.",
     "This takes the stock out of Odoo and gives Shopify the tracking number.",
   ][stepOf(o)];

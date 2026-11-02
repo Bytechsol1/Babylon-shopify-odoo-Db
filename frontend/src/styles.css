@@ -248,6 +248,18 @@ a.btn{text-decoration:none}
 .timeline time{color:var(--muted);font-variant-numeric:tabular-nums}
 .timeline .by{display:block}
 
+/* pack-out */
+.instructions{margin:12px 0 0;padding:10px 12px 10px 30px;border-radius:8px;background:var(--gold-soft);color:var(--ink);font-size:13px}
+.instructions li{margin:2px 0}
+.weight-off{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--bad-soft);color:var(--bad);font-size:13px}
+.weight-off span{color:var(--ink-2)}
+.weight-off input{height:34px;padding:0 10px;border:1px solid #efcaca;border-radius:8px;background:var(--panel);color:var(--ink)}
+.import.cap-hit{color:var(--bad);font-weight:600}
+.table td.wrap{white-space:normal;min-width:260px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.three-eq{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.dialog-actions .spacer{flex:1}
+
 /* signed-in user */
 .avatar{display:grid;place-items:center;width:32px;height:32px;border:0;border-radius:50%;background:var(--brand);color:var(--gold);font-weight:700;cursor:pointer}
 .menu-user{margin:0 8px 6px;font-weight:500;word-break:break-all}

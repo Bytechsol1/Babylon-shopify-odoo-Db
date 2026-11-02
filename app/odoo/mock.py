@@ -1,6 +1,9 @@
 """Mock of the Babylon Odoo warehouse. Same method names the real adapter must provide
 (see real.py for how each maps to Odoo Enterprise models). Dummy data only.
 
+Each product carries what pack-out needs: dims (in, as shipped), oz, protection class (safe | care | box),
+liquid (gets bagged) and glass. The build plan says to measure these at receiving, not take Deposco's.
+
 Lookups are indexed (lots by SKU and by barcode, running reservation totals per SKU), so a stock
 question costs the size of that SKU's lots, not the whole warehouse. Reserve, release and consume
 run under one lock: two orders can never both take the last units."""
@@ -12,12 +15,12 @@ from ..db import kv_get, kv_set
 
 SEED = {
     "products": {
-        "BAB-SER-30": {"name": "Vitamin C Serum 30 ml (glass dropper)", "dims": [1.6, 1.6, 4.6], "oz": 3.4, "glass": True, "soft": False, "bin": "A-01"},
-        "BAB-CRM-50": {"name": "Night Cream 50 g (glass jar)", "dims": [2.6, 2.6, 2.3], "oz": 6.2, "glass": True, "soft": False, "bin": "A-02"},
-        "BAB-MST-60": {"name": "Rose Face Mist 60 ml (pump)", "dims": [1.7, 1.7, 5.6], "oz": 3.6, "glass": False, "soft": False, "bin": "B-01"},
-        "BAB-LIP-01": {"name": "Lip Gloss (tube)", "dims": [0.8, 0.8, 4.4], "oz": 0.7, "glass": False, "soft": False, "bin": "B-02"},
-        "BAB-MSK-01": {"name": "Clay Mask (tube)", "dims": [1.5, 1.1, 6.0], "oz": 4.2, "glass": False, "soft": False, "bin": "B-03"},
-        "BAB-SMP-01": {"name": "Sample Sachet", "dims": [3.0, 4.0, 0.12], "oz": 0.12, "glass": False, "soft": True, "bin": "C-01"},
+        "BAB-SER-30": {"name": "Vitamin C Serum 30 ml (glass dropper)", "dims": [1.6, 1.6, 4.6], "oz": 3.4, "glass": True, "soft": False, "bin": "A-01", "protection": "box", "liquid": True},
+        "BAB-CRM-50": {"name": "Night Cream 50 g (glass jar)", "dims": [2.6, 2.6, 2.3], "oz": 6.2, "glass": True, "soft": False, "bin": "A-02", "protection": "box", "liquid": False},
+        "BAB-MST-60": {"name": "Rose Face Mist 60 ml (pump)", "dims": [1.7, 1.7, 5.6], "oz": 3.6, "glass": False, "soft": False, "bin": "B-01", "protection": "care", "liquid": True},
+        "BAB-LIP-01": {"name": "Lip Gloss (tube)", "dims": [0.8, 0.8, 4.4], "oz": 0.7, "glass": False, "soft": False, "bin": "B-02", "protection": "safe", "liquid": False},
+        "BAB-MSK-01": {"name": "Clay Mask (tube)", "dims": [1.5, 1.1, 6.0], "oz": 4.2, "glass": False, "soft": False, "bin": "B-03", "protection": "safe", "liquid": False},
+        "BAB-SMP-01": {"name": "Sample Sachet", "dims": [3.0, 4.0, 0.12], "oz": 0.12, "glass": False, "soft": True, "bin": "C-01", "protection": "safe", "liquid": False},
     },
     "bundles": {
         "BAB-KIT-01": {"name": "Glow Kit (serum + cream + gloss)", "components": {"BAB-SER-30": 1, "BAB-CRM-50": 1, "BAB-LIP-01": 1}},
@@ -44,6 +47,8 @@ class MockOdoo:
 
     def _load(self, state):
         self.s = state
+        for sku, p in SEED["products"].items():  # fields added since the state was saved come from the seed
+            self.s["products"][sku] = {**p, **self.s["products"].get(sku, {})}
         self._by_sku = defaultdict(list)   # sku -> its lots, oldest expiry first
         self._by_code = {}                 # LOT CODE -> lot
         for l in self.s["lots"]:

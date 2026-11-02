@@ -9,7 +9,7 @@ from . import audit
 from .config import settings
 
 __all__ = ["now_iso", "get_order", "save_order", "list_orders", "count_by_status", "count_claimed_on",
-           "log", "events", "kv_get", "kv_set", "kv_update", "next_seq", "wipe"]
+           "log", "events", "events_of_kind", "kv_get", "kv_set", "kv_update", "next_seq", "wipe"]
 
 LOCK = threading.RLock()
 _conn = None
@@ -27,6 +27,7 @@ CREATE INDEX IF NOT EXISTS orders_updated ON orders(updated_at);
 CREATE INDEX IF NOT EXISTS orders_kind_claimed ON orders(kind, claimed_day);
 CREATE INDEX IF NOT EXISTS orders_kind_status ON orders(kind, status);
 CREATE INDEX IF NOT EXISTS events_order ON events(order_id, id);
+CREATE INDEX IF NOT EXISTS events_kind ON events(kind, id);
 """
 # Substring search on order number and customer without scanning: an FTS5 trigram index kept in step
 # with the orders table by triggers. Searches shorter than 3 characters fall back to LIKE.
@@ -160,6 +161,14 @@ def events(order_id, limit=200):
         rows = conn().execute("SELECT ts,kind,detail,actor FROM events WHERE order_id=? ORDER BY id DESC LIMIT ?",
                               (order_id, limit)).fetchall()
     return [dict(r) for r in reversed(rows)]
+
+
+def events_of_kind(kinds, limit=200):
+    """The latest events of these kinds across all orders, newest first (e.g. package overrides)."""
+    with LOCK:
+        rows = conn().execute(f"SELECT order_id, ts, kind, detail, actor FROM events WHERE kind IN ({','.join('?' * len(kinds))}) "
+                              "ORDER BY id DESC LIMIT ?", (*kinds, limit)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def kv_get(key):

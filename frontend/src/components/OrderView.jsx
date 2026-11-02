@@ -146,8 +146,11 @@ function Now({ o, stock, act, busy }) {
   if (step === 1) {
     return (
       <>
-        <button className="btn primary lg" onClick={() => act.pack(p.bin)} disabled={busy}><Box size={16} /> Use {binName(stock, p.bin)}</button>
-        {p.bubble > 0 && <p className="hint">Wrap the glass in bubble pouches first.</p>}
+        <button className="btn primary lg" onClick={() => act.pack(p.bin)} disabled={busy}><Box size={16} /> Use {p.name || binName(stock, p.bin)}</button>
+        {p.instructions?.length > 0 && (
+          <ul className="instructions">{p.instructions.map(t => <li key={t}>{t}</li>)}</ul>
+        )}
+        {p.expected_oz != null && <p className="hint">Should weigh about {p.expected_oz} oz packed.</p>}
         <OtherBin stock={stock} except={p.bin} onPick={act.pack} busy={busy} />
       </>
     );
@@ -184,35 +187,55 @@ function Pick({ o, stock, act, busy }) {
   );
 }
 
+const OVERRIDE_REASONS = ["didn't fit", "too big", "out of stock", "damaged"];
+
+// Using anything but the suggestion asks why; the reasons are reviewed weekly to tune sizes and settings.
 function OtherBin({ stock, except, onPick, busy }) {
   const bins = (stock?.packaging || []).filter(b => b.bin !== except);
   const [v, setV] = useState(bins[0]?.bin || "");
+  const [why, setWhy] = useState("");
   return (
     <div className="inline">
       <span className="muted">Other package</span>
-      <select value={v} onChange={e => setV(e.target.value)} aria-label="Package">{bins.map(b => <option key={b.bin} value={b.bin}>{b.name}</option>)}</select>
-      <button className="btn" onClick={() => onPick(v)} disabled={busy}>Use</button>
+      <select value={v} onChange={e => setV(e.target.value)} aria-label="Package">{bins.map(b => <option key={b.bin} value={b.bin}>{b.name}{b.qty <= 0 ? " (none left)" : ""}</option>)}</select>
+      <select value={why} onChange={e => setWhy(e.target.value)} aria-label="Reason">
+        <option value="">Why?</option>
+        {OVERRIDE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+      </select>
+      <button className="btn" onClick={() => onPick(v, why)} disabled={busy || !why}>Use</button>
     </div>
   );
 }
 
+// The expected weight comes from pack-out (items + package + fill + bubble). A reading outside the tolerance
+// usually means a missing or extra item; a lead can still accept it with a reason, which is logged.
 function Weigh({ o, stock, act, busy }) {
   const p = o.package || {};
-  const est = o.pick.reduce((a, x) => a + (productOf(stock, x.sku).oz || 0) * x.need, 0) + (p.scanned?.startsWith("BX") ? 4 : 1);
+  const est = p.expected_oz ?? o.pick.reduce((a, x) => a + (productOf(stock, x.sku).oz || 0) * x.need, 0) + 1;
   const [oz, setOz] = useState((o.weight_oz || est).toFixed(1));
+  const [why, setWhy] = useState("");
   const [err, setErr] = useState(null);
   const scale = async () => {
     setErr(null);
     try { setOz((await readScale()).toFixed(1)); } catch (e) { setErr(e.message); }
   };
+  const value = parseFloat(oz);
+  const off = p.expected_oz != null && p.tolerance_oz != null && Number.isFinite(value) && Math.abs(value - p.expected_oz) > p.tolerance_oz;
   return (
     <>
-      <form className="inline" onSubmit={e => { e.preventDefault(); act.weigh(parseFloat(oz)); }}>
+      <form className="inline" onSubmit={e => { e.preventDefault(); act.weigh(value, off ? why : undefined); }}>
         <span className="weight"><input type="number" step="0.1" min="0.1" max="400" value={oz} onChange={e => setOz(e.target.value)} aria-label="Weight in ounces" /><em>oz</em></span>
-        <button className="btn primary lg" disabled={busy}><Scale size={16} /> Confirm weight</button>
+        <button className="btn primary lg" disabled={busy || (off && !why.trim())}><Scale size={16} /> {off ? "Accept anyway" : "Confirm weight"}</button>
         <button type="button" className="btn" onClick={scale}>Read scale</button>
       </form>
-      <p className="hint">Packed in {binName(stock, p.scanned)}. The weight is an estimate until the scale reads it.</p>
+      {p.expected_oz != null && !off && <p className="hint">Expected {p.expected_oz} oz ± {p.tolerance_oz} in {binName(stock, p.scanned)}.</p>}
+      {off && (
+        <div className="weight-off">
+          <b>{value.toFixed(1)} oz is {Math.abs(value - p.expected_oz).toFixed(1)} oz off the expected {p.expected_oz} oz.</b>
+          <span>Check for a missing or extra item and weigh again. Only a lead should accept it anyway.</span>
+          <input value={why} onChange={e => setWhy(e.target.value)} placeholder="Reason, e.g. checked by hand, scale drift" aria-label="Reason for accepting" />
+        </div>
+      )}
       {err && <p className="hint bad">{err}</p>}
     </>
   );

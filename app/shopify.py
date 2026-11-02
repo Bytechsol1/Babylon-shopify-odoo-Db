@@ -24,9 +24,11 @@ class ShopifyError(Exception):
 
 
 def verify_webhook(raw_body: bytes, header: str) -> bool:
-    if not settings.webhook_secret:
+    """Shopify signs webhooks with the app's client secret (or a separate webhook secret on older custom apps)."""
+    secret = settings.webhook_secret or settings.shopify_client_secret
+    if not secret:
         return settings.shopify_mode == "mock"
-    digest = base64.b64encode(hmac.new(settings.webhook_secret.encode(), raw_body, hashlib.sha256).digest()).decode()
+    digest = base64.b64encode(hmac.new(secret.encode(), raw_body, hashlib.sha256).digest()).decode()
     return hmac.compare_digest(digest, header or "")
 
 

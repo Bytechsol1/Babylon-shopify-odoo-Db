@@ -111,7 +111,8 @@ def index():
 @app.get("/api/config")
 def config():
     return dict(settings.public(), margin_min=settings.import_margin_min, minutes_to_import=round(clock.minutes_to_import(), 1),
-                clock_override=clock.override_minute, last_sync=db.kv_get("last_sync"))
+                clock_override=clock.override_minute, last_sync=db.kv_get("last_sync"),
+                daily_cap=settings.daily_cap, claimed_today=pipeline.claimed_today())
 
 
 # ------------------------------------------------------------ Shopify webhooks
@@ -126,14 +127,18 @@ def _webhook(topic):
     return handler
 
 
+HOOKS = {"create": pipeline.ingest_order, "updated": pipeline.on_order_changed, "edited": pipeline.on_order_changed,
+         "cancelled": pipeline.handle_cancel}
+
+
 def _run_hook(topic, gid):
     try:
-        {"create": pipeline.ingest_order, "edited": pipeline.handle_edit, "cancelled": pipeline.handle_cancel}[topic](gid)
+        HOOKS[topic](gid)
     except Exception as e:  # a failed webhook is picked up again by the next poll
         db.log(gid, "webhook_failed", f"{topic}: {e}")
 
 
-for _t in ("create", "edited", "cancelled"):
+for _t in HOOKS:
     app.post(f"/webhooks/shopify/orders-{_t}")(_webhook(_t))
 
 
@@ -161,10 +166,12 @@ def events(oid: str):
 
 class Code(BaseModel):
     code: str
+    reason: str | None = None  # why the packer used a package other than the suggested one
 
 
 class Weight(BaseModel):
     oz: float
+    override_reason: str | None = None  # accepting a weight outside the expected range
 
 
 class Short(BaseModel):
@@ -179,12 +186,12 @@ def scan(oid: str, b: Code):
 
 @app.post("/api/orders/{oid:path}/package")
 def package(oid: str, b: Code):
-    return pipeline.set_package(oid, b.code)
+    return pipeline.set_package(oid, b.code, b.reason)
 
 
 @app.post("/api/orders/{oid:path}/weight")
 def weight(oid: str, b: Weight):
-    return pipeline.set_weight(oid, b.oz)
+    return pipeline.set_weight(oid, b.oz, b.override_reason)
 
 
 @app.post("/api/orders/{oid:path}/short")
@@ -274,6 +281,54 @@ class SampleIn(BaseModel):
 @app.post("/api/samples")
 def sample(b: SampleIn):
     return pipeline.create_sample(b.model_dump())
+
+
+# ------------------------------------------------------------ packaging (pack-out)
+@app.get("/api/packaging")
+def packaging_list():
+    return {"packages": packaging.stock_view(), "settings": packaging.settings(),
+            "override_reasons": packaging.OVERRIDE_REASONS}
+
+
+@app.put("/api/packaging/{code}")
+def packaging_save(code: str, body: dict):
+    try:
+        return packaging.save_package({**body, "code": code})
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/packaging/{code}")
+def packaging_remove(code: str):
+    packaging.remove_package(code.upper())
+    return {"ok": True}
+
+
+class Count(BaseModel):
+    qty: int
+
+
+@app.put("/api/packaging/{code}/count")
+def packaging_count(code: str, b: Count):
+    if code.upper() not in packaging.catalog():
+        raise HTTPException(404, f"{code} is not in the catalog")
+    packaging.set_count(code.upper(), b.qty)
+    db.log("packaging", "count", f"{code.upper()} counted: {b.qty}")
+    return {"ok": True}
+
+
+@app.put("/api/packout/settings")
+def packout_settings(changes: dict):
+    try:
+        return packaging.save_settings(changes)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/packaging/overrides")
+def packaging_overrides(limit: int = 100):
+    """Package and weight overrides with their reasons, newest first: the weekly review list."""
+    return db.events_of_kind(("package_override", "weight_override"), max(1, min(limit, 500)))
 
 
 @app.get("/api/stock")
