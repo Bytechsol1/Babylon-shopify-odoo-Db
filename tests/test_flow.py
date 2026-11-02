@@ -405,10 +405,16 @@ def test_close_catches_a_missed_cancel_before_odoo_moves():
     assert pipeline.void_label(o["id"])["status"] == "cancelled"
 
 
-def test_void_needs_a_cancelled_order():
+def test_void_and_relabel_needs_a_reason_and_gives_a_new_label():
     o = pipeline.request_label(pack_ready(make([(LIP, 1)]), ["L2609-L"])["id"])
-    with pytest.raises(Refuse, match="cancelled"):
-        pipeline.void_label(o["id"])
+    first = o["label"]["tracking"]
+    with pytest.raises(Refuse, match="Pick why"):
+        pipeline.void_label(o["id"])                       # not cancelled: needs a reason
+    out = pipeline.void_label(o["id"], "misprint")
+    assert out["status"] == "packed" and out["label"] is None and odoo.reserved(LIP) == 1   # still Babylon's
+    assert out["voided_labels"][0]["tracking"] == first and out["voided_labels"][0]["reason"] == "misprint"
+    again = pipeline.request_label(o["id"])
+    assert again["status"] == "labeled" and again["label"]["tracking"] != first
 
 
 def test_edit_to_an_item_babylon_lacks_releases_to_ufsi():

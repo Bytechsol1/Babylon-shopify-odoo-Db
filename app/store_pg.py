@@ -11,9 +11,10 @@ from datetime import datetime, timezone
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 from . import audit
+from .orderinfo import client_of, exception_of
 from .config import settings
 
-__all__ = ["now_iso", "get_order", "save_order", "list_orders", "count_by_status", "count_claimed_on",
+__all__ = ["now_iso", "get_order", "save_order", "list_orders", "count_by_status", "count_claimed_on", "count_exceptions",
            "log", "events", "events_of_kind", "kv_get", "kv_set", "kv_update", "next_seq", "wipe"]
 
 if not re.fullmatch(r"[a-z_][a-z0-9_]*", settings.db_schema):
@@ -54,8 +55,19 @@ def _setup(c):
       CREATE INDEX IF NOT EXISTS orders_name_trgm ON {ORDERS} USING gin (name {ops});
       CREATE INDEX IF NOT EXISTS orders_customer_trgm ON {ORDERS} USING gin (customer {ops});
       CREATE INDEX IF NOT EXISTS events_order ON {EVENTS}(order_id, id);
+      ALTER TABLE {ORDERS} ADD COLUMN IF NOT EXISTS exception text;
+      ALTER TABLE {ORDERS} ADD COLUMN IF NOT EXISTS client_id text;
+      CREATE INDEX IF NOT EXISTS orders_created ON {ORDERS}(created_at);
+      CREATE INDEX IF NOT EXISTS orders_exception ON {ORDERS}(updated_at) WHERE exception <> '';
+      CREATE INDEX IF NOT EXISTS orders_client ON {ORDERS}(client_id, status);
       CREATE INDEX IF NOT EXISTS events_kind ON {EVENTS}(kind, id);
     """)
+
+
+def _backfill(c):
+    """Orders saved before the exception/client columns existed get them filled once."""
+    for oid, data in c.execute(f"SELECT id, data FROM {ORDERS} WHERE exception IS NULL OR client_id IS NULL").fetchall():
+        c.execute(f"UPDATE {ORDERS} SET exception = %s, client_id = %s WHERE id = %s", (exception_of(data), client_of(data), oid))
 
 
 def _p():
@@ -68,6 +80,7 @@ def _p():
                                       kwargs={"autocommit": True, "prepare_threshold": None})
                 with pool.connection() as c:
                     _setup(c)
+                    _backfill(c)
                 _pool = pool
     return _pool
 
@@ -95,19 +108,30 @@ def get_order(oid):
 def save_order(o):
     o["updated_at"] = now_iso()
     a = o.get("address") or {}
-    _run(f"""INSERT INTO {ORDERS}(id, name, kind, status, updated_at, customer, created_at, claimed_day, data)
-             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    _run(f"""INSERT INTO {ORDERS}(id, name, kind, status, updated_at, customer, created_at, claimed_day, exception, client_id, data)
+             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
              ON CONFLICT (id) DO UPDATE SET name = excluded.name, kind = excluded.kind, status = excluded.status,
                updated_at = excluded.updated_at, customer = excluded.customer, created_at = excluded.created_at,
-               claimed_day = excluded.claimed_day, data = excluded.data""",
+               claimed_day = excluded.claimed_day, exception = excluded.exception, client_id = excluded.client_id,
+               data = excluded.data""",
          (o["id"], o["name"], o["kind"], o["status"], o["updated_at"], a.get("name") or "",
-          o.get("created_at") or "", o.get("claimed_day") or "", Jsonb(o)))
+          o.get("created_at") or "", o.get("claimed_day") or "", exception_of(o), client_of(o), Jsonb(o)))
     return o
 
 
-def list_orders(statuses=None, kind=None, q=None, limit=None, offset=0, oldest_first=False):
-    """Filtered, sorted and paged in SQL. The queue is oldest first (FIFO); everything else newest first."""
+def list_orders(statuses=None, kind=None, q=None, limit=None, offset=0, oldest_first=False,
+                since=None, exceptions=False, client_id=None):
+    """Filtered, sorted and paged in SQL. The queue is oldest first (FIFO); everything else newest first.
+    since: created at or after (ISO). exceptions: only orders with an open exception."""
     where, args = [], []
+    if since:
+        where.append("created_at >= %s")
+        args.append(since)
+    if exceptions:
+        where.append("exception <> ''")
+    if client_id:
+        where.append("client_id = %s")
+        args.append(client_id)
     if statuses:
         where.append("status = ANY(%s)")
         args.append(list(statuses))
@@ -133,6 +157,10 @@ def count_by_status():
 
 def count_claimed_on(day):
     return _one(f"SELECT count(*) FROM {ORDERS} WHERE kind = 'order' AND claimed_day = %s", (day,))[0]
+
+
+def count_exceptions():
+    return _one(f"SELECT count(*) FROM {ORDERS} WHERE exception <> ''")[0]
 
 
 def log(order_id, kind, detail=""):

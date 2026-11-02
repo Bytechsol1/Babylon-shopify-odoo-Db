@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "motion/react";
 import {
-  Boxes, ChevronDown, Gift, LayoutGrid, ListOrdered, LogOut, PanelLeftClose, Plus, RefreshCw, RotateCcw, ScanLine, Search,
+  Boxes, ChartColumn, ChevronDown, Gift, LayoutGrid, ListOrdered, LogOut, PanelLeftClose, Plus, RefreshCw, RotateCcw, ScanLine, Search, TriangleAlert, Truck,
 } from "lucide-react";
 import { SCENARIOS } from "../lane.js";
 import { Menu } from "./ui.jsx";
@@ -10,12 +10,15 @@ export const PAGES = [
   { key: "dashboard", label: "Dashboard", icon: LayoutGrid },
   { key: "pack", label: "Pack station", icon: ScanLine },
   { key: "orders", label: "Orders", icon: ListOrdered },
+  { key: "exceptions", label: "Exceptions", icon: TriangleAlert },
+  { key: "endofday", label: "End of day", icon: Truck },
+  { key: "results", label: "Results", icon: ChartColumn },
   { key: "stock", label: "Stock", icon: Boxes },
 ];
 
 // Collapsible like Gemini's menu: closed shows only the logo and icons (the logo opens it),
 // open adds the labels and a close button.
-export function Rail({ page, setPage, toPack, open, setOpen }) {
+export function Rail({ page, setPage, counts = {}, open, setOpen }) {
   return (
     <motion.nav className={"rail" + (open ? " open" : "")} aria-label="Main"
                 initial={false} animate={{ width: open ? 220 : 64 }} transition={{ duration: 0.2, ease: "easeOut" }}>
@@ -44,7 +47,7 @@ export function Rail({ page, setPage, toPack, open, setOpen }) {
               </motion.span>
             )}
           </AnimatePresence>
-          {p.key === "pack" && toPack > 0 && <span className="rail-count">{toPack}</span>}
+          {counts[p.key] > 0 && <span className={"rail-count" + (p.key === "exceptions" ? " alert" : "")}>{counts[p.key]}</span>}
         </button>
       ))}
     </motion.nav>

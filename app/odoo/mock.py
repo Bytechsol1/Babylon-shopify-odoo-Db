@@ -3,6 +3,8 @@
 
 Each product carries what pack-out needs: dims (in, as shipped), oz, protection class (safe | care | box),
 liquid (gets bagged) and glass. The build plan says to measure these at receiving, not take Deposco's.
+Customs fields (hs_code, origin, customs_value, hazmat_class, registrations) feed the international label gate;
+registrations is empty here, so a Canada label stays blocked until a Cosmetic Notification is recorded.
 
 Lookups are indexed (lots by SKU and by barcode, running reservation totals per SKU), so a stock
 question costs the size of that SKU's lots, not the whole warehouse. Reserve, release and consume
@@ -15,12 +17,12 @@ from ..db import kv_get, kv_set
 
 SEED = {
     "products": {
-        "BAB-SER-30": {"name": "Vitamin C Serum 30 ml (glass dropper)", "dims": [1.6, 1.6, 4.6], "oz": 3.4, "glass": True, "soft": False, "bin": "A-01", "protection": "box", "liquid": True},
-        "BAB-CRM-50": {"name": "Night Cream 50 g (glass jar)", "dims": [2.6, 2.6, 2.3], "oz": 6.2, "glass": True, "soft": False, "bin": "A-02", "protection": "box", "liquid": False},
-        "BAB-MST-60": {"name": "Rose Face Mist 60 ml (pump)", "dims": [1.7, 1.7, 5.6], "oz": 3.6, "glass": False, "soft": False, "bin": "B-01", "protection": "care", "liquid": True},
-        "BAB-LIP-01": {"name": "Lip Gloss (tube)", "dims": [0.8, 0.8, 4.4], "oz": 0.7, "glass": False, "soft": False, "bin": "B-02", "protection": "safe", "liquid": False},
-        "BAB-MSK-01": {"name": "Clay Mask (tube)", "dims": [1.5, 1.1, 6.0], "oz": 4.2, "glass": False, "soft": False, "bin": "B-03", "protection": "safe", "liquid": False},
-        "BAB-SMP-01": {"name": "Sample Sachet", "dims": [3.0, 4.0, 0.12], "oz": 0.12, "glass": False, "soft": True, "bin": "C-01", "protection": "safe", "liquid": False},
+        "BAB-SER-30": {"name": "Vitamin C Serum 30 ml (glass dropper)", "dims": [1.6, 1.6, 4.6], "oz": 3.4, "glass": True, "soft": False, "bin": "A-01", "protection": "box", "liquid": True, "client_id": "purity", "hs_code": "3304.99", "origin": "US", "customs_value": 38.0, "hazmat_class": None, "registration_required": ["CA"], "registrations": {}},
+        "BAB-CRM-50": {"name": "Night Cream 50 g (glass jar)", "dims": [2.6, 2.6, 2.3], "oz": 6.2, "glass": True, "soft": False, "bin": "A-02", "protection": "box", "liquid": False, "client_id": "purity", "hs_code": "3304.99", "origin": "US", "customs_value": 52.0, "hazmat_class": None, "registration_required": ["CA"], "registrations": {}},
+        "BAB-MST-60": {"name": "Rose Face Mist 60 ml (pump)", "dims": [1.7, 1.7, 5.6], "oz": 3.6, "glass": False, "soft": False, "bin": "B-01", "protection": "care", "liquid": True, "client_id": "purity", "hs_code": "3304.99", "origin": "US", "customs_value": 24.0, "hazmat_class": None, "registration_required": ["CA"], "registrations": {}},
+        "BAB-LIP-01": {"name": "Lip Gloss (tube)", "dims": [0.8, 0.8, 4.4], "oz": 0.7, "glass": False, "soft": False, "bin": "B-02", "protection": "safe", "liquid": False, "client_id": "purity", "hs_code": "3304.10", "origin": "US", "customs_value": 18.0, "hazmat_class": None, "registration_required": ["CA"], "registrations": {}},
+        "BAB-MSK-01": {"name": "Clay Mask (tube)", "dims": [1.5, 1.1, 6.0], "oz": 4.2, "glass": False, "soft": False, "bin": "B-03", "protection": "safe", "liquid": False, "client_id": "purity", "hs_code": "3304.99", "origin": "US", "customs_value": 28.0, "hazmat_class": None, "registration_required": ["CA"], "registrations": {}},
+        "BAB-SMP-01": {"name": "Sample Sachet", "dims": [3.0, 4.0, 0.12], "oz": 0.12, "glass": False, "soft": True, "bin": "C-01", "protection": "safe", "liquid": False, "client_id": "purity", "hs_code": "3304.99", "origin": "US", "customs_value": 0.5, "hazmat_class": None, "registration_required": ["CA"], "registrations": {}},
     },
     "bundles": {
         "BAB-KIT-01": {"name": "Glow Kit (serum + cream + gloss)", "components": {"BAB-SER-30": 1, "BAB-CRM-50": 1, "BAB-LIP-01": 1}},

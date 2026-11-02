@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Pencil, Plus } from "lucide-react";
+import { ClipboardCheck, Pencil, Plus } from "lucide-react";
 import { api } from "../api.js";
 import { ago } from "../lane.js";
 import { Card, Empty } from "../components/ui.jsx";
@@ -8,19 +8,24 @@ import { shortName } from "./Dashboard.jsx";
 
 const TYPE_LABEL = { box: "Box", mailer: "Padded mailer", poly: "Poly mailer" };
 
-export default function Stock({ stock, act, tick }) {
+export default function Stock({ stock, act, tick, cfg }) {
   const [editing, setEditing] = useState(null);  // a package being edited, or {} for a new one
+  const [counting, setCounting] = useState(null);  // a product being cycle counted
   const [overrides, setOverrides] = useState([]);
-  useEffect(() => { api("/api/packaging/overrides?limit=50").then(setOverrides).catch(() => {}); }, [tick]);
+  const [counts, setCounts] = useState([]);
+  useEffect(() => {
+    api("/api/packaging/overrides?limit=50").then(setOverrides).catch(() => {});
+    api("/api/stock/counts").then(setCounts).catch(() => {});
+  }, [tick]);
   if (!stock) return <div className="page"><Empty>Loading…</Empty></div>;
   const top = Math.max(1, ...stock.products.map(p => p.on_hand));
   const packTop = Math.max(1, ...stock.packaging.map(b => b.qty));
   return (
     <div className="page">
-      <Card title="Products in Babylon's warehouse" pad={false}>
+      <Card title="Products in Babylon's warehouse" pad={false} action={<SyncInfo cfg={cfg} />}>
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>SKU</th><th>Product</th><th>Shelf</th><th className="num">On hand</th><th className="num">Held for orders</th><th className="num">Available</th><th className="wide" /></tr></thead>
+            <thead><tr><th>SKU</th><th>Product</th><th>Shelf</th><th className="num">On hand</th><th className="num">Held for orders</th><th className="num">Available</th><th className="wide" /><th /></tr></thead>
             <tbody>
               {stock.products.map(p => (
                 <tr key={p.sku} className="static">
@@ -31,6 +36,7 @@ export default function Stock({ stock, act, tick }) {
                   <td className="num">{p.reserved}</td>
                   <td className="num strong">{p.available}{p.available <= 5 && <em className="flag">Low</em>}</td>
                   <td><Meter value={p.available} max={top} warn={p.available <= 5} /></td>
+                  <td><button className="btn ghost sm" onClick={() => setCounting(p)} aria-label={`Count ${p.sku}`}><ClipboardCheck size={13} /> Count</button></td>
                 </tr>
               ))}
             </tbody>
@@ -82,8 +88,60 @@ export default function Stock({ stock, act, tick }) {
         )}
       </Card>
 
+      <Card title="Cycle counts" pad={false}>
+        {counts.length === 0 ? <Empty>No counts yet. Count a shelf with the Count button above; Odoo stays the record, the difference is logged.</Empty> : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>When</th><th>SKU</th><th className="num">Counted</th><th className="num">Odoo</th><th className="num">Difference</th><th>Note</th></tr></thead>
+              <tbody>
+                {counts.slice(0, 30).map((c, i) => (
+                  <tr key={i} className="static">
+                    <td className="muted">{ago(c.at)}</td>
+                    <td className="mono">{c.sku}</td>
+                    <td className="num">{c.counted}</td>
+                    <td className="num muted">{c.system}</td>
+                    <td className={"num strong" + (c.variance ? " late" : "")}>{c.variance > 0 ? "+" : ""}{c.variance}</td>
+                    <td className="wrap muted">{c.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
       {editing && <PackageDialog pkg={editing} act={act} onClose={() => setEditing(null)} />}
+      {counting && <CountDialog p={counting} act={act} onClose={() => setCounting(null)} />}
     </div>
+  );
+}
+
+// Stock counts go to Shopify on a schedule (SYNC_SECONDS) or with the Sync button.
+function SyncInfo({ cfg }) {
+  const last = cfg?.last_sync;
+  const every = cfg?.sync_seconds ? `every ${Math.round(cfg.sync_seconds / 60)} min` : "by hand only";
+  return <span className="muted small">Shopify stock sync {every}{last ? ` · last ${ago(last.at)} (${last.count} products${last.errors?.length ? `, ${last.errors.length} errors` : ""})` : ""}</span>;
+}
+
+function CountDialog({ p, act, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => { ref.current?.showModal(); }, []);
+  const [n, setN] = useState("");
+  const [note, setNote] = useState("");
+  return (
+    <dialog ref={ref} onClose={onClose} onCancel={onClose}>
+      <form onSubmit={e => { e.preventDefault(); act.count(p.sku, Number(n), note, onClose); }}>
+        <h2>Count {shortName(p.name)}</h2>
+        <p className="muted">Shelf {p.bin}. Count what is physically there, including units held for orders.</p>
+        <label>Counted<input type="number" min="0" step="1" required autoFocus value={n} onChange={e => setN(e.target.value)} /></label>
+        <label>Note<input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional, e.g. 2 damaged set aside" /></label>
+        <div className="dialog-actions">
+          <span className="spacer" />
+          <button type="button" className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary">Log count</button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 

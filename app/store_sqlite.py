@@ -6,9 +6,10 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from . import audit
+from .orderinfo import client_of, exception_of
 from .config import settings
 
-__all__ = ["now_iso", "get_order", "save_order", "list_orders", "count_by_status", "count_claimed_on",
+__all__ = ["now_iso", "get_order", "save_order", "list_orders", "count_by_status", "count_claimed_on", "count_exceptions",
            "log", "events", "events_of_kind", "kv_get", "kv_set", "kv_update", "next_seq", "wipe"]
 
 LOCK = threading.RLock()
@@ -20,12 +21,15 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, order_id
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT);
 """
 # columns added after the first release; older databases get them (and a one-off backfill) on open
-EXTRA_COLUMNS = {"customer": "TEXT", "created_at": "TEXT", "claimed_day": "TEXT"}
+EXTRA_COLUMNS = {"customer": "TEXT", "created_at": "TEXT", "claimed_day": "TEXT", "exception": "TEXT", "client_id": "TEXT"}
 INDEXES = """
 CREATE INDEX IF NOT EXISTS orders_status_created ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS orders_updated ON orders(updated_at);
 CREATE INDEX IF NOT EXISTS orders_kind_claimed ON orders(kind, claimed_day);
 CREATE INDEX IF NOT EXISTS orders_kind_status ON orders(kind, status);
+CREATE INDEX IF NOT EXISTS orders_created ON orders(created_at);
+CREATE INDEX IF NOT EXISTS orders_exception ON orders(updated_at) WHERE exception != '';
+CREATE INDEX IF NOT EXISTS orders_client ON orders(client_id, status);
 CREATE INDEX IF NOT EXISTS events_order ON events(order_id, id);
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind, id);
 """
@@ -50,7 +54,7 @@ def now_iso():
 def _columns(o):
     return {"name": o["name"], "kind": o["kind"], "status": o["status"], "updated_at": o.get("updated_at") or "",
             "customer": (o.get("address") or {}).get("name") or "", "created_at": o.get("created_at") or "",
-            "claimed_day": o.get("claimed_day") or ""}
+            "claimed_day": o.get("claimed_day") or "", "exception": exception_of(o), "client_id": client_of(o)}
 
 
 def _migrate(c):
@@ -64,8 +68,8 @@ def _migrate(c):
         for r in c.execute("SELECT data FROM orders").fetchall():
             o = json.loads(r[0])
             cols = _columns(o)
-            c.execute("UPDATE orders SET customer=?, created_at=?, claimed_day=? WHERE id=?",
-                      (cols["customer"], cols["created_at"], cols["claimed_day"], o["id"]))
+            c.execute("UPDATE orders SET customer=?, created_at=?, claimed_day=?, exception=?, client_id=? WHERE id=?",
+                      (cols["customer"], cols["created_at"], cols["claimed_day"], cols["exception"], cols["client_id"], o["id"]))
     c.executescript(INDEXES)
     new_search = not c.execute("SELECT 1 FROM sqlite_master WHERE name='orders_search'").fetchone()
     c.executescript(SEARCH)
@@ -101,19 +105,30 @@ def save_order(o):
     cols = _columns(o)
     with LOCK:
         conn().execute(
-            "INSERT INTO orders(id,name,kind,status,updated_at,customer,created_at,claimed_day,data) VALUES(?,?,?,?,?,?,?,?,?) "
+            "INSERT INTO orders(id,name,kind,status,updated_at,customer,created_at,claimed_day,exception,client_id,data) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,status=excluded.status,"
             "updated_at=excluded.updated_at,customer=excluded.customer,created_at=excluded.created_at,"
-            "claimed_day=excluded.claimed_day,data=excluded.data",
+            "claimed_day=excluded.claimed_day,exception=excluded.exception,client_id=excluded.client_id,data=excluded.data",
             (o["id"], cols["name"], cols["kind"], cols["status"], cols["updated_at"], cols["customer"],
-             cols["created_at"], cols["claimed_day"], json.dumps(o)))
+             cols["created_at"], cols["claimed_day"], cols["exception"], cols["client_id"], json.dumps(o)))
         conn().commit()
     return o
 
 
-def list_orders(statuses=None, kind=None, q=None, limit=None, offset=0, oldest_first=False):
-    """Filtered, sorted and paged in SQL. The queue is oldest first (FIFO); everything else newest first."""
+def list_orders(statuses=None, kind=None, q=None, limit=None, offset=0, oldest_first=False,
+                since=None, exceptions=False, client_id=None):
+    """Filtered, sorted and paged in SQL. The queue is oldest first (FIFO); everything else newest first.
+    since: created at or after (ISO). exceptions: only orders with an open exception."""
     where, args = [], []
+    if since:
+        where.append("created_at >= ?")
+        args.append(since)
+    if exceptions:
+        where.append("exception != ''")
+    if client_id:
+        where.append("client_id = ?")
+        args.append(client_id)
     if statuses:
         where.append(f"status IN ({','.join('?' * len(statuses))})")
         args += list(statuses)
@@ -147,6 +162,11 @@ def count_by_status():
 def count_claimed_on(day):
     with LOCK:
         return conn().execute("SELECT COUNT(*) FROM orders WHERE kind='order' AND claimed_day=?", (day,)).fetchone()[0]
+
+
+def count_exceptions():
+    with LOCK:
+        return conn().execute("SELECT COUNT(*) FROM orders WHERE exception != ''").fetchone()[0]
 
 
 def log(order_id, kind, detail=""):

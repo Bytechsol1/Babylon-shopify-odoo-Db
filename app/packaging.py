@@ -300,10 +300,11 @@ def _instructions(items, pkg):
     return out
 
 
-def suggest(items, counts=None, s=None):
-    """The cheapest package in stock that fits, or None if nothing does. items: [(product, qty)]."""
+def suggest(items, counts=None, s=None, cat=None):
+    """The cheapest package in stock that fits, or None if nothing does. items: [(product, qty)].
+    cat: a candidate catalog instead of the live one (the box-buying study)."""
     s = s or settings()
-    cat = catalog()  # read once: on Postgres every read is a round trip
+    cat = cat or catalog()  # read once: on Postgres every read is a round trip
     counts = counts if counts is not None else stock(cat)
     cls = order_class(items)
     best = None

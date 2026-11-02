@@ -95,6 +95,25 @@ See `Babylon Pack Station Build Plan.md`. Built so far:
   secret. Register them once per store: `python scripts/register_webhooks.py https://<station address>`.
   Polling stays on as the backup.
 - **Daily claim cap** shown in `/api/config` and the header ("Claimed today N of cap").
+- **Carrier interface** (`app/shipping.py`): one provider interface (rate, buy, void, end of day, track, pickup)
+  with `mock` and `easypost` behind it (`PARCEL_PROVIDER`). Mode is `parcel` / `ltl` / `ftl` / `ocean_air`;
+  only parcel is built, the others refuse clearly. ShipStation can be added as a third provider.
+- **One scan box** on the Pack station: lot, package code, weight, order number, or a command
+  (`!LABEL`, `!SHIP`, `!REPRINT`, `!NEXT`, `!R1`–`!R4` reasons). Beep and green flash when it worked,
+  buzz and red flash when it didn't. "Barcode sheet" prints the command and package barcodes.
+- **Pick waves**: orders claimed before each cutoff (`WAVE_TIMES`, default 10:00 and 14:00 Pacific) are picked
+  from one combined list sorted by shelf (Pack station → Wave pick list).
+- **Void & relabel** with a reason (misprint, wrong weight, …): postage refunded, back to the weigh step.
+- **End of day**: one scan form per carrier for the driver (printable manifest with the mock provider),
+  then book the pickup. **Check tracking** on shipped orders.
+- **Exceptions page**: hand-backs, failed claims, flagged orders and rejected tracking, with owner, age and a
+  required note to resolve. The count shows red on the menu.
+- **Results page**: checkout-to-ship median against UFSI's 16.1 h, claimed of eligible, why orders were handed
+  back or kept by UFSI, packaging and postage per order.
+- **Cycle counts** (Stock page → Count): the variance against Odoo is logged; Odoo stays the record.
+- **International gate**: no label without HS code, origin, customs value and any registration the destination needs.
+- **Multi-client ready**: every order and product carries `client_id` (`CLIENT_ID`, default `purity`).
+- **Box study**: `python scripts/packout_box_study.py` runs pack-out over past orders to size the box list.
 
 ## Deploy: Supabase + AWS Lightsail + Vercel
 

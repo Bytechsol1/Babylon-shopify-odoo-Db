@@ -1,20 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { api, enc } from "./api.js";
-import { PRESETS } from "./lane.js";
+import { PRESETS, stepOf } from "./lane.js";
+import * as feedback from "./feedback.js";
 import { PAGES, Rail, Topbar } from "./components/Shell.jsx";
 import SampleDialog from "./components/SampleDialog.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Pack from "./pages/Pack.jsx";
 import Orders from "./pages/Orders.jsx";
 import Stock from "./pages/Stock.jsx";
+import Exceptions from "./pages/Exceptions.jsx";
+import EndOfDay from "./pages/EndOfDay.jsx";
+import Results from "./pages/Results.jsx";
 
 const SUBTITLES = {
   dashboard: "",
   pack: "Pick, pack, weigh, label, ship",
   orders: "Every order the lane has seen",
   stock: "Babylon's San Jose warehouse",
+  exceptions: "Orders somebody has to look at",
+  endofday: "Scan forms and carrier pickups",
+  results: "Is the lane worth running?",
 };
+
+const REASON_CMDS = { "!R1": "didn't fit", "!R2": "too big", "!R3": "out of stock", "!R4": "damaged" };
 
 export default function App({ user, onSignOut }) {
   const [page, setPage] = useState("dashboard");
@@ -29,6 +38,7 @@ export default function App({ user, onSignOut }) {
   const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const [sampleOpen, setSampleOpen] = useState(false);
+  const [pendingPkg, setPendingPkg] = useState(null);  // a scanned package that isn't the suggestion, waiting for a reason
   const [menuOpen, setMenuOpen] = useState(() => {
     try { return localStorage.getItem("babylon-menu") === "open"; } catch { return false; }
   });
@@ -85,13 +95,16 @@ export default function App({ user, onSignOut }) {
   }, [page, selId, queue]);
 
   // Every button goes through here: one action at a time, errors shown, then a refresh.
+  // A good action beeps once; a refusal buzzes and flashes red, so the packer can keep eyes on the bench.
   const run = useCallback(async fn => {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true);
     try {
       const msg = await fn();
       if (msg) show(...(Array.isArray(msg) ? msg : [msg]));
+      if (msg !== null) (Array.isArray(msg) && msg[1] === "warn" ? feedback.bad : feedback.ok)();
     } catch (e) {
+      feedback.bad();
       if (e.checks) setDetail(d => d && { ...d, live_check: { ok: false, checks: e.checks } });
       show(e.checks ? "Stopped before buying the label" : e.message, "err");
     } finally {
@@ -102,7 +115,51 @@ export default function App({ user, onSignOut }) {
 
   const oid = () => enc(cur.current.selId);
   const post = (path, body) => api(`/api/orders/${oid()}/${path}`, "POST", body);
-  const open = id => { setSelId(id); setPage("pack"); };
+  const open = id => { setSelId(id); setPendingPkg(null); setPage("pack"); };
+
+  // One scan box for the whole station: work out what was scanned and do that.
+  const scanAny = raw => {
+    const code = raw.trim().toUpperCase();
+    const o = detail && detail.id === cur.current.selId ? detail : null;
+    if (REASON_CMDS[code]) {
+      if (!pendingPkg) { feedback.bad(); return show("No package is waiting for a reason", "err"); }
+      const { code: pkg } = pendingPkg; setPendingPkg(null);
+      return act.pack(pkg, REASON_CMDS[code]);
+    }
+    if (code === "!NEXT") {
+      const next = queue.find(x => x.id !== cur.current.selId);
+      if (!next) { feedback.bad(); return show("Nothing else to pack", "warn"); }
+      feedback.ok(); return open(next.id);
+    }
+    if (code.startsWith("!")) {
+      if (!o) { feedback.bad(); return show("Open an order first", "err"); }
+      if (code === "!LABEL") return act.label();
+      if (code === "!SHIP") return act.ship();
+      if (code === "!REPRINT") return act.reprint();
+      feedback.bad(); return show(`Unknown command ${code}`, "err");
+    }
+    if (/^#\d+$/.test(code) || (/^\d+$/.test(code) && !(o && stepOf(o) === 2))) {
+      return run(async () => {
+        const name = code.startsWith("#") ? code : "#" + code;
+        const rows = await api(`/api/orders?view=all&limit=5&q=${encodeURIComponent(name)}`);
+        const hit = rows.find(r => r.name === name);
+        if (!hit) throw new Error(`No order ${name}`);
+        open(hit.id); return name;
+      });
+    }
+    if (!o) { feedback.bad(); return show("Open an order first, or scan an order number", "err"); }
+    if (/^(PM|PL|BX)-/.test(code)) {
+      if (code === o.package?.bin) return act.pack(code);
+      setPendingPkg({ code }); feedback.ok();
+      return show(`${code} isn't the suggested package. Scan a reason: !R1 didn't fit, !R2 too big, !R3 out of stock, !R4 damaged`, "warn");
+    }
+    if (stepOf(o) === 2 && /^\d+(\.\d+)?$/.test(code)) return act.weigh(parseFloat(code));
+    return act.scan(raw.trim());
+  };
+  const step = detail ? stepOf(detail) : null;
+  const scanHint = pendingPkg ? `${pendingPkg.code}: scan a reason !R1–!R4`
+    : !detail ? "Scan an order number or !NEXT"
+    : ["Scan each item's lot", "Scan the package", "Scan or type the weight", "Scan !LABEL", "Scan !SHIP"][step] || "";
 
   const newOrder = async preset => {
     const o = await api("/api/dev/order", "POST", preset);
@@ -127,9 +184,30 @@ export default function App({ user, onSignOut }) {
     label: () => run(async () => { await post("label"); return "Label bought and sent to the printer"; }),
     reprint: () => run(async () => { await post("reprint"); return "Sent to the printer again"; }),
     ship: () => run(async () => { await post("close"); return "Shipped"; }),
+    scanAny,
     void: () => run(async () => {
       if (!confirm("Void this label? The postage is refunded and the order will not ship.")) return null;
       await post("void"); return "Label voided";
+    }),
+    relabel: reason => run(async () => {
+      if (!confirm(`Void this label (${reason})? The postage is refunded and you weigh and print a new one.`)) return null;
+      await post("void", { reason }); return "Label voided. Weigh again for a new label.";
+    }),
+    track: () => run(async () => { const t = await api(`/api/orders/${oid()}/track`); return `Carrier status: ${t.status.replace(/_/g, " ")}`; }),
+    assignException: (id, owner) => run(async () => { await api(`/api/exceptions/${enc(id)}/assign`, "POST", { owner }); return owner ? `Assigned to ${owner}` : "Unassigned"; }),
+    resolveException: id => run(async () => {
+      const note = prompt("What was done about it?");
+      if (!note?.trim()) return null;
+      await api(`/api/exceptions/${enc(id)}/resolve`, "POST", { note }); return "Resolved";
+    }),
+    scanForm: carrier => run(async () => { const f = await api("/api/end-of-day/scan-form", "POST", { carrier }); return `Scan form ${f.id}: ${f.parcels.length} parcels`; }),
+    pickup: (carrier, start, end, done) => run(async () => {
+      const p = await api("/api/end-of-day/pickup", "POST", { carrier, start, end }); done?.();
+      return `Pickup booked, confirmation ${p.confirmation}`;
+    }),
+    count: (sku, counted, note, done) => run(async () => {
+      const r = await api(`/api/stock/${enc(sku)}/count`, "POST", { counted, note }); done?.();
+      return r.variance === 0 ? `${sku}: matches Odoo` : [`${sku}: ${r.variance > 0 ? "+" : ""}${r.variance} against Odoo. Logged.`, "warn"];
     }),
     standDown: () => run(async () => {
       if (!confirm("Give this order back to UFSI? Babylon will not ship it.")) return null;
@@ -175,7 +253,7 @@ export default function App({ user, onSignOut }) {
 
   return (
     <div className="shell">
-      <Rail page={page} setPage={setPage} toPack={summary?.to_pack || 0} open={menuOpen} setOpen={toggleMenu} />
+      <Rail page={page} setPage={setPage} counts={{ pack: summary?.to_pack, exceptions: summary?.exceptions }} open={menuOpen} setOpen={toggleMenu} />
       <div className="main">
         <Topbar title={PAGES.find(p => p.key === page).label} sub={SUBTITLES[page]} cfg={cfg} user={user} onSignOut={onSignOut}
                 search={search} setSearch={v => { setSearch(v); if (v && page === "dashboard") setPage("orders"); }}
@@ -183,9 +261,12 @@ export default function App({ user, onSignOut }) {
         <AnimatePresence mode="wait">
           <motion.div key={page} className="content" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }}>
             {page === "dashboard" && <Dashboard summary={summary} stock={stock} open={open} go={setPage} />}
-            {page === "pack" && <Pack queue={shownQueue} detail={detail} selId={selId} cfg={cfg} stock={stock} act={act} busy={busy} />}
+            {page === "pack" && <Pack queue={shownQueue} detail={detail} selId={selId} cfg={cfg} stock={stock} act={act} busy={busy} scanHint={scanHint} tick={tick} />}
             {page === "orders" && <Orders q={search.trim()} tick={tick} counts={summary?.counts || {}} open={open} />}
-            {page === "stock" && <Stock stock={stock} act={act} tick={tick} />}
+            {page === "stock" && <Stock stock={stock} act={act} tick={tick} cfg={cfg} />}
+            {page === "exceptions" && <Exceptions tick={tick} act={act} open={open} />}
+            {page === "endofday" && <EndOfDay tick={tick} act={act} cfg={cfg} />}
+            {page === "results" && <Results tick={tick} />}
           </motion.div>
         </AnimatePresence>
       </div>

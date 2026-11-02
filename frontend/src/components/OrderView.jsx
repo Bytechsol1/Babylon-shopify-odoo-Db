@@ -45,7 +45,7 @@ export default function OrderView({ o, cfg, stock, act, busy }) {
               {o.attention && !o.cancelled && <p className="alert">{o.attention}</p>}
               {o.writeback_error && <p className="alert">Shopify didn't accept the tracking number. Press “Mark as shipped” again.</p>}
               <div className="step-body">
-                {o.status === "shipped" ? <Shipped o={o} /> : <Now o={o} stock={stock} act={act} busy={busy} />}
+                {o.status === "shipped" ? <Shipped o={o} act={act} /> : <Now o={o} stock={stock} act={act} busy={busy} />}
                 {o.writeback_error && o.status === "shipped" && <button className="btn primary lg" onClick={act.ship} disabled={busy}><Truck size={16} /> Mark as shipped</button>}
               </div>
             </motion.div>
@@ -256,18 +256,53 @@ function ShipStep({ o, act, busy }) {
       </dl>
       {lb.print_ok === false && <p className="alert">{lb.print}</p>}
       <LabelActions o={o} />
+      <Relabel act={act} busy={busy} />
     </>
   );
 }
 
-function Shipped({ o }) {
+const VOID_REASONS = ["misprint", "wrong weight", "wrong package", "damaged label", "address fixed", "other"];
+
+// A bad label is voided (postage refunded) and the order goes back to the weigh step for a new one.
+function Relabel({ act, busy }) {
+  const [why, setWhy] = useState("");
+  return (
+    <div className="inline">
+      <span className="muted">Label wrong?</span>
+      <select value={why} onChange={e => setWhy(e.target.value)} aria-label="Why void the label">
+        <option value="">Why?</option>
+        {VOID_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+      </select>
+      <button className="btn danger" onClick={() => act.relabel(why)} disabled={busy || !why}><Undo2 size={14} /> Void & relabel</button>
+    </div>
+  );
+}
+
+const TRACK = { pre_transit: "Label made, not scanned yet", in_transit: "On the way", out_for_delivery: "Out for delivery",
+  delivered: "Delivered", return_to_sender: "Coming back", failure: "Delivery problem", unknown: "No news yet" };
+
+function Tracking({ o, act }) {
+  const t = o.tracking_status;
+  return (
+    <div className="inline">
+      <span className="muted">Carrier says</span>
+      <b>{t ? TRACK[t.status] || t.status : "not checked"}</b>
+      {t?.checked_at && <small className="muted">checked {t.checked_at.slice(11, 16)}</small>}
+      <button className="btn sm" onClick={act.track}><Truck size={13} /> Check tracking</button>
+    </div>
+  );
+}
+
+function Shipped({ o, act }) {
   return (
     <>
       <dl className="facts">
         <div><dt>Odoo</dt><dd>Stock taken out, delivery {o.odoo_ref}</dd></div>
         <div><dt>Shopify</dt><dd>{o.kind === "order" ? "Tracking added to the order" : "Not touched (sample)"}</dd></div>
         <div><dt>UFSI</dt><dd>Never saw it</dd></div>
+        {o.label && <div><dt>Tracking</dt><dd className="mono">{o.label.tracking}</dd></div>}
       </dl>
+      {o.label && <Tracking o={o} act={act} />}
       {o.label && <LabelActions o={o} />}
     </>
   );

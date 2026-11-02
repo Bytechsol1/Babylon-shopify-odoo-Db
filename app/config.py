@@ -56,6 +56,16 @@ class Settings:
         self.printer_host = _e("PRINTER_HOST")
         self.printer_port = int(_e("PRINTER_PORT", "9100") or 9100)
 
+        # 3PL: every record carries the client it belongs to. Purity is the first client.
+        self.client_id = _e("CLIENT_ID", "purity").lower()
+        # Pick waves: orders claimed before a cutoff go on that wave's combined pick list.
+        self.wave_times = [t.strip() for t in _e("WAVE_TIMES", "10:00,14:00").split(",") if t.strip()]
+        self.wave_tz = _e("WAVE_TZ", "America/Los_Angeles")
+        # Results page: UFSI's median checkout-to-ship (build plan, Sep 15 to Oct 10 2026 sample).
+        self.ufsi_baseline_hours = float(_e("UFSI_BASELINE_HOURS", "16.1"))
+        # Parcel provider behind the shipping interface. Defaults follow the older EASYPOST_MODE setting.
+        self.parcel_provider = _e("PARCEL_PROVIDER") or ("easypost" if _e("EASYPOST_MODE", "mock") == "live" else "mock")
+
         self.db_path = _e("DB_PATH", str(ROOT / "var" / "babylon.db"))
         self.database_url = _e("DATABASE_URL")       # set = Postgres (Supabase); empty = the SQLite file above
         self.db_schema = _e("DB_SCHEMA", "babylon")  # kept out of Supabase's public API schema
@@ -80,7 +90,8 @@ class Settings:
 
     CHOICES = {"shopify_mode": ("mock", "live"), "easypost_mode": ("mock", "live"), "printer_mode": ("file", "tcp"),
                "deposco_mode": ("mock", "off", "live"), "odoo_mode": ("mock", "real"), "claim_mode": ("live", "shadow"),
-               "notify_mode": ("auto", "on", "off"), "auth": ("off", "supabase")}
+               "notify_mode": ("auto", "on", "off"), "auth": ("off", "supabase"),
+               "parcel_provider": ("mock", "easypost")}  # shipstation slots in once quoted
 
     def _validate(self):
         """A typo such as CLAIM_MODE=Live must stop the app, not quietly act like another mode."""
@@ -107,6 +118,8 @@ class Settings:
             "odoo": self.odoo_mode, "claims": self.claim_mode,
             "dev_tools": self.dev_tools, "notify": self.notify_customer(),
             "shop": self.shop if self.shopify_mode == "live" else "",
+            "client_id": self.client_id, "parcel_provider": self.parcel_provider, "sync_seconds": self.sync_seconds,
+            "wave_times": self.wave_times, "wave_tz": self.wave_tz,
         }
 
 

@@ -291,3 +291,44 @@ dialog input,dialog select{width:100%;height:34px;padding:0 10px;border:1px soli
 .three{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px}
 .item-row{display:grid;grid-template-columns:3fr 1fr;gap:8px;margin-top:6px}
 .dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+
+/* ---- scan bar, sound/flash feedback (P1 #1) */
+.scanbar{display:flex;align-items:center;gap:10px;height:48px;padding:0 14px;background:var(--panel);border:2px solid var(--brand-soft);border-radius:var(--radius);color:var(--brand)}
+.scanbar:focus-within{border-color:var(--brand)}
+.scanbar input{flex:1;min-width:0;height:100%;border:0;outline:0;background:none;font-size:15px;font-family:ui-monospace,Consolas,monospace;color:var(--ink)}
+.scanbar-hint{font-size:12.5px;font-weight:600;color:var(--ink-2);background:var(--soft);padding:4px 10px;border-radius:6px;white-space:nowrap}
+@keyframes flash-ok{from{box-shadow:inset 0 0 0 6px var(--ok)}to{box-shadow:inset 0 0 0 0 transparent}}
+@keyframes flash-bad{from{box-shadow:inset 0 0 0 10px var(--bad)}to{box-shadow:inset 0 0 0 0 transparent}}
+body.flash-ok{animation:flash-ok .45s ease-out} body.flash-bad{animation:flash-bad .7s ease-out}
+.pack-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.stack{display:flex;flex-direction:column;gap:16px}
+.rail-count.alert{background:var(--bad);color:#fff}
+.small{font-size:12px}
+.table td.late{color:var(--bad);font-weight:600}
+.cell-input{height:30px;width:140px;padding:0 8px;border:1px solid transparent;border-radius:6px;background:none}
+.cell-input:hover,.cell-input:focus{border-color:var(--line);background:var(--panel)}
+.row-actions{display:flex;gap:6px;align-items:center}
+.inline-tight{display:inline-flex;gap:4px;align-items:center}
+.inline-tight input{height:30px;padding:0 6px;border:1px solid var(--line);border-radius:6px}
+.grid-3.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:1100px){.grid-3.two{grid-template-columns:1fr}}
+.eod-carriers{display:flex;flex-wrap:wrap;gap:12px}
+.eod-carrier{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line);border-radius:8px}
+
+/* ---- printable sheets: barcodes, manifests, pick lists */
+.sheet-overlay{position:fixed;inset:0;z-index:60;display:grid;place-items:start center;padding:32px 16px;overflow:auto;background:rgba(16,24,40,.45)}
+.sheet{width:min(860px,100%);padding:24px;background:#fff;border-radius:var(--radius);box-shadow:0 20px 48px rgba(16,24,40,.25)}
+.sheet-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.sheet-head h2{flex:1;margin:0;font-size:18px}
+.sheet h3{margin:18px 0 8px;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.bc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+.bc{margin:0;padding:8px;border:1px solid var(--line);border-radius:8px;text-align:center;break-inside:avoid}
+.bc svg{max-width:100%;height:auto}
+.bc figcaption{font-size:12px;color:var(--ink-2)}
+@media print{
+  body *{visibility:hidden}
+  .print-area,.print-area *{visibility:visible}
+  .print-area{position:absolute;left:0;top:0;width:100%;box-shadow:none;padding:0}
+  .no-print,.no-print *{display:none!important}
+  .sheet-overlay{position:static;background:none;padding:0}
+}

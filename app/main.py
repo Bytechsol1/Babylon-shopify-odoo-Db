@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
-from . import audit, auth, clock, db, packaging, pipeline
+from . import audit, auth, clock, db, ops, packaging, pipeline
 from .config import settings
 from .pipeline import Refuse
 from .services import odoo, shopify, deposco
@@ -214,9 +214,18 @@ def reprint(oid: str):
     return pipeline.reprint(oid)
 
 
+class VoidIn(BaseModel):
+    reason: str | None = None  # misprint, wrong weight, ... (not needed when the order was cancelled)
+
+
 @app.post("/api/orders/{oid:path}/void")
-def void(oid: str):
-    return pipeline.void_label(oid)
+def void(oid: str, b: VoidIn | None = None):
+    return pipeline.void_label(oid, b.reason if b else None)
+
+
+@app.get("/api/orders/{oid:path}/track")
+def track(oid: str):
+    return ops.track(oid)
 
 
 @app.post("/api/orders/{oid:path}/close")
@@ -337,6 +346,80 @@ def stock():
     cat = odoo.catalog()
     return {"products": [dict(levels[s], sku=s, name=p["name"], bin=p["bin"], oz=p.get("oz")) for s, p in cat.items()],
             "packaging": packaging.stock_view()}
+
+
+# ------------------------------------------------------------ exceptions, waves, end of day, results, counts
+@app.get("/api/exceptions")
+def exceptions():
+    return ops.exceptions()
+
+
+class OwnerIn(BaseModel):
+    owner: str
+
+
+class NoteIn(BaseModel):
+    note: str
+
+
+@app.post("/api/exceptions/{oid:path}/assign")
+def exception_assign(oid: str, b: OwnerIn):
+    return ops.assign_exception(oid, b.owner)
+
+
+@app.post("/api/exceptions/{oid:path}/resolve")
+def exception_resolve(oid: str, b: NoteIn):
+    return ops.resolve_exception(oid, b.note)
+
+
+@app.get("/api/waves")
+def waves():
+    return ops.waves()
+
+
+@app.get("/api/end-of-day")
+def end_of_day():
+    return ops.end_of_day_status()
+
+
+class CarrierIn(BaseModel):
+    carrier: str
+
+
+@app.post("/api/end-of-day/scan-form")
+def scan_form(b: CarrierIn):
+    return ops.create_scan_form(b.carrier)
+
+
+class PickupIn(BaseModel):
+    carrier: str
+    start: str  # ISO date-time
+    end: str
+
+
+@app.post("/api/end-of-day/pickup")
+def pickup(b: PickupIn):
+    return ops.book_pickup(b.carrier, b.start, b.end)
+
+
+@app.get("/api/results")
+def results(days: int = 30):
+    return ops.results(max(1, min(days, 365)))
+
+
+class CountIn(BaseModel):
+    counted: int
+    note: str = ""
+
+
+@app.post("/api/stock/{sku}/count")
+def stock_count(sku: str, b: CountIn):
+    return ops.cycle_count(sku, b.counted, b.note)
+
+
+@app.get("/api/stock/counts")
+def stock_counts(limit: int = 100):
+    return ops.cycle_counts(max(1, min(limit, 1000)))
 
 
 @app.post("/api/sync/inventory")

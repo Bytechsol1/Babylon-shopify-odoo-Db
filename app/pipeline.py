@@ -124,6 +124,7 @@ def ingest_order(gid, trigger="webhook"):
             return existing
         o = shopify.get_order(gid)
         rec = {"id": o["id"], "name": o["name"], "kind": "order", "status": "ufsi", "trigger": trigger,
+               "client_id": settings.client_id,
                "created_at": o["created_at"], "pick": [], "package": None, "weight_oz": None, "label": None,
                "shop_updated": o.get("updated_at")}
         return _decide(rec, o)
@@ -161,9 +162,10 @@ def _decide(rec, o):
     except ShopifyError as e:
         odoo.release(gid)
         rec["status"] = "claim_failed"
+        rec["release_reason"] = f"Shopify refused the claim: {e}"
         db.log(gid, "claim_failed", str(e))
         return db.save_order(rec)
-    rec.update(status="queued", claim_route=route, claimed_day=clock.now().date().isoformat(),
+    rec.update(status="queued", claim_route=route, claimed_day=clock.now().date().isoformat(), claimed_at=db.now_iso(),
                pick=_build_pick(need), package=pkg)
     db.log(gid, "claimed", "Claimed for Babylon" + (" (moved with fulfillmentOrderMove)" if route == "move"
                                                      else " (Shopify routing had already assigned it)"))
@@ -290,6 +292,9 @@ def _release_to_ufsi(o, why):
     _return_package(o)
     odoo.release(o["id"])
     o["status"] = "released"
+    o["release_reason"] = why
+    o["released_at"] = db.now_iso()
+    o.pop("exception_resolved", None)
     db.log(o["id"], "released", why)
 
 
@@ -357,20 +362,34 @@ def _mark_cancelled_after_label(o):
     db.log(o["id"], "cancelled", o["attention"])
 
 
-def void_label(oid):
-    """Cancelled after the label: refund the label in EasyPost, free the stock, never ship."""
+VOID_REASONS = ("misprint", "wrong weight", "wrong package", "damaged label", "address fixed", "other")
+
+
+def void_label(oid, reason=None):
+    """Refund an unused label. A cancelled order then frees its stock and never ships; any other order goes
+    back to "packed" so a new label can be bought (the live check runs again)."""
     with _lk(oid):
         o = _get(oid)
-        if o["status"] != "labeled" or not o.get("cancelled"):
-            raise Refuse(409, "Only a labeled order that was cancelled in Shopify can be voided")
+        if o["status"] != "labeled" or not o.get("label"):
+            raise Refuse(409, "Only a labeled order that hasn't shipped can be voided")
+        if not o.get("cancelled") and reason not in VOID_REASONS:
+            raise Refuse(400, f"Pick why the label is voided: {', '.join(VOID_REASONS)}")
         try:
             res = shipping.void(o["label"])
         except shipping.ShippingError as e:
-            raise Refuse(502, f"{e}. Void it in the EasyPost dashboard, then try again.")
-        odoo.release(oid)
-        o["status"] = "cancelled"
-        o["attention"] = None
-        db.log(oid, "voided", f"{res}. Stock hold released, items go back on the shelf.")
+            raise Refuse(502, f"{e}. Void it in the carrier's dashboard, then try again.")
+        _forget_scan(o["id"])
+        o.setdefault("voided_labels", []).append(dict({k: o["label"].get(k) for k in ("tracking", "carrier", "rate")},
+                                                      reason=reason or "cancelled", at=db.now_iso()))
+        o["label"], o["shipment"] = None, None
+        if o.get("cancelled"):
+            odoo.release(oid)
+            o["status"] = "cancelled"
+            o["attention"] = None
+            db.log(oid, "voided", f"{res}. Stock hold released, items go back on the shelf.")
+        else:
+            o["status"] = "packed"
+            db.log(oid, "voided", f"{res} ({reason}). Buy a new label.")
         return view(db.save_order(o))
 
 
@@ -416,6 +435,7 @@ def create_sample(data):
     if not odoo.reserve(sid, need):
         raise Refuse(409, "Not enough stock in Odoo for this sample")
     rec = {"id": sid, "name": sid, "kind": "sample", "status": "queued", "created_at": db.now_iso(),
+           "client_id": settings.client_id, "claimed_at": db.now_iso(),
            "address": addr, "shipping_method": "Ground", "lines": lines, "lines_hash": "", "fo_id": None,
            "checks": [], "pick": _build_pick(need), "package": pkg, "weight_oz": None, "label": None,
            "note": str(data.get("note") or ""), "email": str(data.get("email") or "")}
@@ -521,6 +541,7 @@ def set_package(oid, bin_code, reason=None):
         packaging.take(bin_code)
         items = _units(o)
         pkg.update(scanned=bin_code, override=override, override_reason=reason if override else None,
+                   cost_each=cat[bin_code]["cost"],
                    dims=packaging.parcel_dims(bin_code, items),
                    expected_oz=packaging.expected_oz(bin_code, items) if override else pkg.get("expected_oz"))
         pkg["tolerance_oz"] = packaging.tolerance_oz(pkg["expected_oz"]) if pkg.get("expected_oz") is not None else None
@@ -579,9 +600,27 @@ def shipment_lines(o):
             return None
         for x in p["picked"][:p["need"]]:
             key = (p["sku"], x["lot"])
-            line = lines.setdefault(key, {"sku": p["sku"], "lot": x["lot"], "expiry": x.get("expiry"), "qty": 0})
+            line = lines.setdefault(key, {"sku": p["sku"], "lot": x["lot"], "expiry": x.get("expiry"), "qty": 0,
+                                          "client_id": o.get("client_id") or settings.client_id})
             line["qty"] += 1
     return list(lines.values())
+
+
+def international_gaps(o):
+    """What blocks an international label (build plan data gates): every product needs an HS code, country of
+    origin, customs value and registration for the destination where one applies. Domestic orders: nothing."""
+    dest = (o.get("address") or {}).get("country") or settings.domestic_country
+    if dest == settings.domestic_country:
+        return []
+    gaps = []
+    for line in o["pick"]:
+        p = odoo.product(line["sku"]) or {}
+        need = [f for f in ("hs_code", "origin", "customs_value") if not p.get(f)]
+        if need:
+            gaps.append(f"{line['sku']} has no {', '.join(need)}")
+        if dest in (p.get("registration_required") or ()) and dest not in (p.get("registrations") or {}):
+            gaps.append(f"{line['sku']} isn't registered for {dest}")
+    return gaps
 
 
 def live_check(o):
@@ -621,6 +660,9 @@ def request_label(oid):
         if lines is None:
             raise Refuse(409, "No lot, no label: every unit needs its finished-goods lot scanned")
         o["shipment_lines"] = lines
+        missing = international_gaps(o)
+        if missing:
+            raise Refuse(409, "No customs data, no international label: " + "; ".join(missing))
         if o["kind"] == "order":
             try:
                 lc = live_check(o)
@@ -646,11 +688,24 @@ def request_label(oid):
             ship = shipping.buy(sh["id"], o, oz, lots)
         except shipping.ShippingError as e:
             raise Refuse(502, str(e))
-        o["label"] = {k: ship[k] for k in ("tracking", "carrier", "service", "rate", "url", "zpl", "zpl_url", "mock", "shipment_id")}
+        o["label"] = {k: ship.get(k) for k in ("tracking", "carrier", "service", "rate", "url", "zpl", "zpl_url", "mock",
+                                               "shipment_id", "bought_at")}
+        o["label"]["bought_at"] = o["label"]["bought_at"] or db.now_iso()
         o["status"] = "labeled"
+        _await_scan(o)
         db.log(oid, "label", f"{ship['service']} {ship['tracking']} (${ship['rate']})")
         _print(o)
         return view(db.save_order(o))
+
+
+def _await_scan(o):
+    """Remember a bought label until it's on a carrier's end-of-day scan form."""
+    carrier, oid = o["label"]["carrier"], o["id"]
+    db.kv_update("scan_pending", lambda d: {**d, carrier: sorted(set(d.get(carrier, [])) | {oid})}, {})
+
+
+def _forget_scan(oid):
+    db.kv_update("scan_pending", lambda d: {c: [x for x in ids if x != oid] for c, ids in d.items()}, {})
 
 
 def _print(o):
@@ -711,6 +766,7 @@ def close_order(oid):
                        else "customer NOT notified (test or mock label, see NOTIFY_CUSTOMER)"))
             except ShopifyError as e:
                 o["status"] = "shipped"
+                o.setdefault("shipped_at", db.now_iso())
                 o["writeback_error"] = str(e)
                 db.log(oid, "writeback_failed", str(e))
                 db.save_order(o)
@@ -718,6 +774,7 @@ def close_order(oid):
         if o["kind"] == "sample":
             db.log(oid, "email", f"Tracking email to {o.get('email') or 'recipient'} (stub, not sent in the POC)")
         o["status"] = "shipped"
+        o.setdefault("shipped_at", db.now_iso())
         return view(db.save_order(o))
 
 
@@ -735,6 +792,7 @@ def summary():
                         "ufsi": orders(("ufsi", "claim_failed", "released")), "shadow": orders(("shadow",))},
             "samples_shipped": counts.get(("sample", "shipped"), 0),
             "to_pack": sum(by_status.get(s, 0) for s in ACTIVE),
+            "exceptions": db.count_exceptions(),
             "low_stock": sorted(s for s, a in levels.items() if a <= LOW_STOCK),
             "recent": [summary_row(o) for o in db.list_orders(limit=8)]}
 
